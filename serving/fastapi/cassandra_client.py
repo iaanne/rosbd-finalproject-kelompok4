@@ -15,8 +15,11 @@ _session = None
 
 _forex_insert = None
 _forex_select = None
+_all_forex_select = None
 
 _features_select = None
+_feature_insert = None
+_all_features_select = None
 
 _clustering_insert = None
 _clustering_select = None
@@ -30,7 +33,8 @@ _notification_select = None
 
 def init():
     global _cluster, _session
-    global _forex_insert, _forex_select, _features_select
+    global _forex_insert, _forex_select, _all_forex_select
+    global _features_select, _feature_insert, _all_features_select
     global _clustering_insert, _clustering_select, _batch_select
     global _pairs_select
     global _notification_insert, _notification_select
@@ -47,9 +51,20 @@ def init():
     _forex_select = _session.prepare(
         "SELECT * FROM forex_rates WHERE currency_pair = ? ORDER BY ts DESC LIMIT ?"
     )
+    _all_forex_select = _session.prepare(
+        "SELECT currency_pair, ts, open, high, low, close, volume FROM forex_rates"
+    )
 
     _features_select = _session.prepare(
         "SELECT * FROM features WHERE currency_pair = ? ORDER BY ts DESC LIMIT ?"
+    )
+    _feature_insert = _session.prepare(
+        "INSERT INTO features (currency_pair, ts, returns_1d, log_return, rolling_mean_5d, rolling_mean_20d, "
+        "rolling_std_5d, volatility_20d, corr_dxy_20d, corr_cny_20d, rsi_14, bb_upper, bb_lower) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+    )
+    _all_features_select = _session.prepare(
+        "SELECT * FROM features"
     )
 
     _clustering_insert = _session.prepare(
@@ -165,6 +180,8 @@ def insert_notification(notif: dict):
     try:
         bucket = "all"
         notif_id = notif.get("id", uuid.uuid4())
+        if isinstance(notif_id, str):
+            notif_id = uuid.UUID(notif_id)
         ts = notif.get("ts", datetime.now(timezone.utc))
         _session.execute(
             _notification_insert,
@@ -191,4 +208,38 @@ def get_notifications(limit: int = 50):
         return notifs
     except Exception as e:
         logger.error("Error fetching notifications: %s", e)
+        return []
+
+
+def get_all_forex_rates():
+    try:
+        rows = _session.execute(_all_forex_select)
+        return [dict(r) for r in rows]
+    except Exception as e:
+        logger.error("Error fetching all forex rates: %s", e)
+        return []
+
+
+def insert_feature(data: dict):
+    try:
+        _session.execute(
+            _feature_insert,
+            (
+                data["currency_pair"], data["ts"], data.get("returns_1d"), data.get("log_return"),
+                data.get("rolling_mean_5d"), data.get("rolling_mean_20d"), data.get("rolling_std_5d"),
+                data.get("volatility_20d"), data.get("corr_dxy_20d"), data.get("corr_cny_20d"),
+                data.get("rsi_14"), data.get("bb_upper"), data.get("bb_lower")
+            ),
+        )
+    except Exception as e:
+        logger.error("Error inserting feature: %s", e)
+        raise
+
+
+def get_all_features():
+    try:
+        rows = _session.execute(_all_features_select)
+        return [dict(r) for r in rows]
+    except Exception as e:
+        logger.error("Error fetching all features: %s", e)
         return []
