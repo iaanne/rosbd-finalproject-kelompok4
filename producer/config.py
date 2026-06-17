@@ -1,7 +1,11 @@
-KAFKA_BROKER = "localhost:9092"
-KAFKA_TOPIC = "forex-raw"
-FETCH_INTERVAL_SECONDS = 60
+import os
 
+KAFKA_BROKER = os.getenv("KAFKA_BROKER", "localhost:9092")
+KAFKA_TOPIC = os.getenv("KAFKA_TOPIC", "forex-raw")
+FETCH_INTERVAL_SECONDS = int(os.getenv("FETCH_INTERVAL_SECONDS", "60"))
+
+# DXY & CNY WAJIB ada -> input corr_dxy & corr_cny (inti IKR + cluster).
+# GOLD (GC=F) dibuang karena di luar scope Investor + Bank Indonesia.
 TICKERS = [
     "IDR=X",
     "THB=X",
@@ -11,7 +15,6 @@ TICKERS = [
     "VND=X",
     "DX-Y.NYB",
     "CNY=X",
-    "GC=F",
 ]
 
 CURRENCY_ALIAS = {
@@ -23,5 +26,4 @@ CURRENCY_ALIAS = {
     "VND=X": "VND",
     "DX-Y.NYB": "DXY",
     "CNY=X": "CNY",
-    "GC=F": "GOLD",
 }

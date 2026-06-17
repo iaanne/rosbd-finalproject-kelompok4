@@ -18,77 +18,14 @@ services:
       - zookeeper
     ports:
       - "9092:9092"
+      - "29092:29092"
     environment:
       KAFKA_BROKER_ID: 1
       KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092
+      KAFKA_LISTENERS: INTERNAL://0.0.0.0:9092,EXTERNAL://0.0.0.0:29092
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://localhost:9092,EXTERNAL://100.75.210.119:29092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
       KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
       KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
-
-  # ==============================
-  # LAPTOP 3 - Serving Layer
-  # ==============================
-  cassandra:
-    image: cassandra:5.0
-    container_name: cassandra-laptop3
-    ports:
-      - "9042:9042"
-    environment:
-      - CASSANDRA_CLUSTER_NAME=BigDataCluster
-    volumes:
-      - cassandra-data:/var/lib/cassandra
-    healthcheck:
-      test: ["CMD", "cqlsh", "-e", "describe keyspaces"]
-      interval: 15s
-      timeout: 10s
-      retries: 10
-
-  elasticsearch:
-    image: docker.elastic.co/elasticsearch/elasticsearch:8.14.0
-    container_name: elasticsearch-laptop3
-    ports:
-      - "9200:9200"
-    environment:
-      - discovery.type=single-node
-      - xpack.security.enabled=false
-      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
-    volumes:
-      - es-data:/usr/share/elasticsearch/data
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9200"]
-      interval: 15s
-      timeout: 10s
-      retries: 10
-
-  fastapi:
-    build: ./fastapi
-    container_name: fastapi-laptop3
-    ports:
-      - "8000:8000"
-    depends_on:
-      cassandra:
-        condition: service_healthy
-      elasticsearch:
-        condition: service_healthy
-    environment:
-      - CASSANDRA_HOST=cassandra
-      - ELASTICSEARCH_HOST=http://elasticsearch:9200
-    volumes:
-      - ./fastapi:/app
-
-  react:
-    build: ./react-dashboard
-    container_name: react-laptop3
-    ports:
-      - "3000:3000"
-    depends_on:
-      - fastapi
-    environment:
-      - REACT_APP_API_URL=http://localhost:8000
-      - REACT_APP_WS_URL=ws://localhost:8000
-    stdin_open: true
-
-volumes:
-  cassandra-data:
-  es-data:

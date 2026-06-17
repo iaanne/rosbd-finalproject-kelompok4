@@ -12,19 +12,24 @@ def main():
 
     producer = get_producer()
 
-    while True:
-        try:
-            print(f"\n[{time.strftime('%Y-%m-%d %H:%M:%S')}] Fetching forex data...")
-            records = fetch_all()
-            if records:
-                send_data(producer, records)
-                print(f"[OK] Sent {len(records)} records to Kafka")
-            else:
-                print("[WARN] No data fetched")
-        except Exception as e:
-            print(f"[ERROR] {e}")
-
-        time.sleep(FETCH_INTERVAL_SECONDS)
+    try:
+        while True:
+            try:
+                print(f"\n[{time.strftime('%Y-%m-%d %H:%M:%S')}] Fetching forex data...")
+                records = fetch_all()
+                if records:
+                    send_data(producer, records)
+                    print(f"[OK] Sent {len(records)} records to Kafka")
+                else:
+                    print("[WARN] No data fetched")
+            except Exception as e:
+                print(f"[ERROR] {e}")
+            time.sleep(FETCH_INTERVAL_SECONDS)
+    except KeyboardInterrupt:
+        print("\n[STOP] Shutting down producer...")
+    finally:
+        producer.flush()
+        producer.close()
 
 
 if __name__ == "__main__":
