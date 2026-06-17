@@ -1,0 +1,59 @@
+services:
+  # ==========================================
+  # LAPTOP 2: Processing Layer (Nadhifa)
+  # ==========================================
+  spark-master:
+    image: bitnamilegacy/spark:3.5.1
+    container_name: spark-master-laptop2
+    environment:
+      - CASSANDRA_CLUSTER_NAME=BigDataCluster
+    volumes:
+      - cassandra-data:/var/lib/cassandra
+    healthcheck:
+      test: ["CMD", "cqlsh", "-e", "describe keyspaces"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.14.0
+    container_name: elasticsearch-laptop3
+    ports:
+      - "9200:9200"
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
+    volumes:
+      - es-data:/usr/share/elasticsearch/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9200"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+
+  fastapi:
+    build: ./fastapi
+    container_name: fastapi-laptop3
+    ports:
+      - "8000:8000"
+    depends_on:
+      - spark-master
+    volumes:
+      - ./processing:/app
+
+  # Jupyter PySpark untuk development kode
+  jupyter-spark:
+    image: jupyter/pyspark-notebook:spark-3.5.0
+    container_name: jupyter-laptop2
+    ports:
+      - "8888:8888" # Jupyter Notebook UI
+      - "4040:4040" # Spark Application UI
+    environment:
+      - REACT_APP_API_URL=http://localhost:8000
+      - REACT_APP_WS_URL=ws://localhost:8000
+    stdin_open: true
+
+volumes:
+  cassandra-data:
+  es-data:
