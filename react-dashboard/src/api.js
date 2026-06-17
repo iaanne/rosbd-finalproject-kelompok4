@@ -26,5 +26,7 @@ export const api = {
     const q = new URLSearchParams(params).toString();
     return get(`/cluster-logs${q ? '?' + q : ''}`);
   },
+  getNotifications: (limit = 50) => get(`/notifications?limit=${limit}`),
+  postDataUpdate: (type, data) => post('/data-update', { type, data }),
   health: () => get('/health'),
 };

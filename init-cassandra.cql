@@ -1,4 +1,4 @@
-CREATE KEYSPACE IF NOT EXISTS dedolarisasi 
+CREATE KEYSPACE IF NOT EXISTS dedolarisasi
 WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1};
 
 USE dedolarisasi;
@@ -6,7 +6,7 @@ USE dedolarisasi;
 -- Tabel 1: forex_rates (OHLCV)
 CREATE TABLE IF NOT EXISTS forex_rates (
     currency_pair TEXT,
-    timestamp TIMESTAMP,
+    ts TIMESTAMP,
     open DOUBLE,
     high DOUBLE,
     low DOUBLE,
@@ -15,10 +15,10 @@ CREATE TABLE IF NOT EXISTS forex_rates (
     PRIMARY KEY ((currency_pair), ts)
 ) WITH CLUSTERING ORDER BY (ts DESC);
 
--- Tabel 2: features (lengkap dengan RSI (Relative Strength Index) , Bollinger Bands, dll)
+-- Tabel 2: features
 CREATE TABLE IF NOT EXISTS features (
     currency_pair TEXT,
-    timestamp TIMESTAMP,
+    ts TIMESTAMP,
     returns_1d DOUBLE,
     log_return DOUBLE,
     rolling_mean_5d DOUBLE,
@@ -33,10 +33,10 @@ CREATE TABLE IF NOT EXISTS features (
     PRIMARY KEY ((currency_pair), ts)
 ) WITH CLUSTERING ORDER BY (ts DESC);
 
--- Tabel 3: clustering_results (untuk 3 algoritma)
+-- Tabel 3: clustering_results
 CREATE TABLE IF NOT EXISTS clustering_results (
     batch_id TEXT,
-    timestamp TIMESTAMP,
+    ts TIMESTAMP,
     algorithm TEXT,
     currency_pair TEXT,
     cluster_label INT,
@@ -44,4 +44,17 @@ CREATE TABLE IF NOT EXISTS clustering_results (
     is_outlier BOOLEAN,
     silhouette_score DOUBLE,
     PRIMARY KEY ((batch_id), ts, algorithm, currency_pair)
+) WITH CLUSTERING ORDER BY (ts DESC);
+
+-- Tabel 4: notifications (untuk real-time notifikasi)
+CREATE TABLE IF NOT EXISTS notifications (
+    bucket TEXT,
+    ts TIMESTAMP,
+    id UUID,
+    type TEXT,
+    title TEXT,
+    message TEXT,
+    batch_id TEXT,
+    algorithm TEXT,
+    PRIMARY KEY ((bucket), ts, id)
 ) WITH CLUSTERING ORDER BY (ts DESC);
