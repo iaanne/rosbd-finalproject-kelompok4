@@ -35,7 +35,7 @@ services:
       retries: 10
 
   fastapi:
-    build: ./fastapi
+    build: ./serving/fastapi
     container_name: fastapi-laptop3
     ports:
       - "8000:8000"
@@ -56,10 +56,10 @@ services:
       - ALERT_EMAIL_INVESTOR=${ALERT_EMAIL_INVESTOR:-}
       - IDR_VOLATILITY_THRESHOLD=${IDR_VOLATILITY_THRESHOLD:-0.005}
     volumes:
-      - ./fastapi:/app
+      - ./serving/fastapi:/app
 
   react:
-    build: ./react-dashboard
+    build: ./serving/react-dashboard
     container_name: react-laptop3
     ports:
       - "3000:3000"
