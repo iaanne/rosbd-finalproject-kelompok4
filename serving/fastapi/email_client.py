@@ -3,7 +3,7 @@ import os
 import logging
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
-from typing import list
+from typing import List
 
 logger = logging.getLogger(__name__)
 
@@ -28,7 +28,7 @@ def init():
         logger.warning("SMTP not configured — email alerts disabled")
 
 
-def _send(to_emails: list[str], subject: str, html_body: str):
+def _send(to_emails: List[str], subject: str, html_body: str):
     if not _smtp_ready or not to_emails:
         logger.warning("Cannot send email — SMTP not configured or no recipients")
         return False
