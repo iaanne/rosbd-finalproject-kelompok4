@@ -3,6 +3,7 @@ from cassandra.query import dict_factory
 import os
 import logging
 import uuid
+import math
 from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
@@ -12,6 +13,13 @@ KEYSPACE = "dedolarisasi"
 
 _cluster = None
 _session = None
+
+
+def clean_dict_floats(d: dict) -> dict:
+    for k, v in d.items():
+        if isinstance(v, float) and (math.isinf(v) or math.isnan(v)):
+            d[k] = None
+    return d
 
 _forex_insert = None
 _forex_select = None
@@ -127,7 +135,7 @@ def insert_forex_rate(data: dict):
 def get_features(currency_pair: str, limit: int = 100):
     try:
         rows = _session.execute(_features_select, (currency_pair, limit))
-        return [dict(r) for r in rows]
+        return [clean_dict_floats(dict(r)) for r in rows]
     except Exception as e:
         logger.error("Error fetching features: %s", e)
         return []
@@ -239,7 +247,7 @@ def insert_feature(data: dict):
 def get_all_features():
     try:
         rows = _session.execute(_all_features_select)
-        return [dict(r) for r in rows]
+        return [clean_dict_floats(dict(r)) for r in rows]
     except Exception as e:
         logger.error("Error fetching all features: %s", e)
         return []

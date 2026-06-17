@@ -117,6 +117,7 @@ def run_compute_features_logic():
             return 0
             
         df_features = pd.concat(features_list).reset_index(drop=True)
+        df_features = df_features.replace([np.inf, -np.inf], np.nan)
         
         inserted_count = 0
         for _, row in df_features.iterrows():
