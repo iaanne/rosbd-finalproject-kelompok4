@@ -35,7 +35,7 @@ services:
       retries: 10
 
   fastapi:
-    build: ./fastapi
+    build: ./serving/fastapi
     container_name: fastapi-laptop3
     ports:
       - "8000:8000"
@@ -47,11 +47,19 @@ services:
     environment:
       - CASSANDRA_HOST=cassandra
       - ELASTICSEARCH_HOST=http://elasticsearch:9200
+      - SMTP_HOST=${SMTP_HOST:-}
+      - SMTP_PORT=${SMTP_PORT:-587}
+      - SMTP_USER=${SMTP_USER:-}
+      - SMTP_PASS=${SMTP_PASS:-}
+      - SMTP_FROM=${SMTP_FROM:-alert@dedolarisasi.com}
+      - ALERT_EMAIL_BI=${ALERT_EMAIL_BI:-}
+      - ALERT_EMAIL_INVESTOR=${ALERT_EMAIL_INVESTOR:-}
+      - IDR_VOLATILITY_THRESHOLD=${IDR_VOLATILITY_THRESHOLD:-0.005}
     volumes:
-      - ./fastapi:/app
+      - ./serving/fastapi:/app
 
   react:
-    build: ./react-dashboard
+    build: ./serving/react-dashboard
     container_name: react-laptop3
     ports:
       - "3000:3000"

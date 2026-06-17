@@ -1,4 +1,5 @@
 import logging
+import os
 import uuid
 from datetime import datetime, timezone
 from contextlib import asynccontextmanager
@@ -28,6 +29,7 @@ from elasticsearch_client import (
     index_log,
 )
 from notifications import manager
+import email_client
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -38,6 +40,7 @@ async def lifespan(app: FastAPI):
     logger.info("Starting up — connecting to Cassandra & Elasticsearch")
     cassandra_init()
     es_init()
+    email_client.init()
     yield
     logger.info("Shutting down — closing connections")
     cassandra_close()
@@ -142,6 +145,20 @@ async def handle_data_update(payload: DataUpdateIn):
             data = ForexUpdateData(**payload.data)
             insert_forex_rate(data.model_dump())
             await manager.broadcast_forex_update(data.model_dump())
+            if data.currency_pair.upper() == "IDR":
+                spread = data.high - data.low
+                volatility = spread / data.close if data.close else 0
+                threshold = float(os.getenv("IDR_VOLATILITY_THRESHOLD", "0.005"))
+                if volatility >= threshold:
+                    email_client.send_idr_alert(
+                        currency_pair=data.currency_pair,
+                        cluster_label=-1,
+                        is_outlier=True,
+                        volatility=volatility,
+                        details={"open": data.open, "high": data.high,
+                                 "low": data.low, "close": data.close,
+                                 "volume": data.volume},
+                    )
 
         elif payload.type == "clustering_done":
             data = ClusteringDoneData(**payload.data)
@@ -156,6 +173,13 @@ async def handle_data_update(payload: DataUpdateIn):
                     "is_outlier": res.is_outlier,
                     "silhouette_score": data.silhouette_score,
                 })
+                if res.currency_pair.upper() == "IDR" and res.is_outlier:
+                    email_client.send_idr_alert(
+                        currency_pair=res.currency_pair,
+                        cluster_label=res.cluster_label,
+                        is_outlier=res.is_outlier,
+                        details={"batch_id": data.batch_id, "algorithm": data.algorithm},
+                    )
             notif_data = {
                 "id": str(uuid.uuid4()),
                 "ts": datetime.now(timezone.utc),
