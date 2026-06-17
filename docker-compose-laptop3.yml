@@ -58,17 +58,15 @@ services:
     volumes:
       - ./serving/fastapi:/app
 
-  react:
-    build: ./serving/react-dashboard
-    container_name: react-laptop3
+  streamlit:
+    build: ./serving/streamlit
+    container_name: streamlit-laptop3
     ports:
-      - "3000:3000"
+      - "8501:8501"
     depends_on:
       - fastapi
     environment:
-      - REACT_APP_API_URL=http://localhost:8000
-      - REACT_APP_WS_URL=ws://localhost:8000
-    stdin_open: true
+      - API_BASE=http://fastapi:8000
 
 volumes:
   cassandra-data:
