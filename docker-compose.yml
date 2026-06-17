@@ -1,66 +1,51 @@
-version: '3.8'
-
 services:
-  cassandra:
-    image: cassandra:5.0
-    container_name: cassandra-laptop3
-    ports:
-      - "9042:9042"
+  # ==========================================
+  # LAPTOP 2: Processing Layer (Nadhifa)
+  # ==========================================
+  spark-master:
+    image: bitnamilegacy/spark:3.5.1
+    container_name: spark-master-laptop2
     environment:
-      - CASSANDRA_CLUSTER_NAME=BigDataCluster
-    volumes:
-      - cassandra-data:/var/lib/cassandra
-    healthcheck:
-      test: ["CMD", "cqlsh", "-e", "describe keyspaces"]
-      interval: 15s
-      timeout: 10s
-      retries: 10
-
-  elasticsearch:
-    image: docker.elastic.co/elasticsearch/elasticsearch:8.14.0
-    container_name: elasticsearch-laptop3
+      - SPARK_MODE=master
+      - SPARK_RPC_AUTHENTICATION_ENABLED=no
+      - SPARK_RPC_ENCRYPTION_ENABLED=no
+      - SPARK_LOCAL_STORAGE_ENCRYPTION_ENABLED=no
+      - SPARK_SSL_ENABLED=no
     ports:
-      - "9200:9200"
+      - "8080:8080" # Spark Master Web UI
+      - "7077:7077" # Spark Master Port
+    volumes:
+      - ./processing:/app
+
+  spark-worker:
+    image: bitnamilegacy/spark:3.5.1
+    container_name: spark-worker-laptop2
     environment:
-      - discovery.type=single-node
-      - xpack.security.enabled=false
-      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
-    volumes:
-      - es-data:/usr/share/elasticsearch/data
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9200"]
-      interval: 15s
-      timeout: 10s
-      retries: 10
-
-  fastapi:
-    build: ./fastapi
-    container_name: fastapi-laptop3
+      - SPARK_MODE=worker
+      - SPARK_MASTER_URL=spark://spark-master:7077
+      - SPARK_WORKER_MEMORY=2G
+      - SPARK_WORKER_CORES=2
+      - SPARK_RPC_AUTHENTICATION_ENABLED=no
+      - SPARK_RPC_ENCRYPTION_ENABLED=no
+      - SPARK_LOCAL_STORAGE_ENCRYPTION_ENABLED=no
+      - SPARK_SSL_ENABLED=no
     ports:
-      - "8000:8000"
+      - "8081:8081" # Spark Worker Web UI
     depends_on:
-      cassandra:
-        condition: service_healthy
-      elasticsearch:
-        condition: service_healthy
-    environment:
-      - CASSANDRA_HOST=cassandra
-      - ELASTICSEARCH_HOST=http://elasticsearch:9200
+      - spark-master
     volumes:
-      - ./fastapi:/app
+      - ./processing:/app
 
-  react:
-    build: ./react-dashboard
-    container_name: react-laptop3
+  # Jupyter PySpark untuk development kode
+  jupyter-spark:
+    image: jupyter/pyspark-notebook:spark-3.5.0
+    container_name: jupyter-laptop2
     ports:
-      - "3000:3000"
-    depends_on:
-      - fastapi
+      - "8888:8888" # Jupyter Notebook UI
+      - "4040:4040" # Spark Application UI
     environment:
-      - REACT_APP_API_URL=http://localhost:8000
-      - REACT_APP_WS_URL=ws://localhost:8000
-    stdin_open: true
-
-volumes:
-  cassandra-data:
-  es-data:
+      - JUPYTER_ENABLE_LAB=yes
+      - GRANT_SUDO=yes
+    user: root
+    volumes:
+      - ./processing:/home/jovyan/work
