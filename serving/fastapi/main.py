@@ -107,9 +107,12 @@ def run_compute_features_logic():
             group['bb_upper'] = group['rolling_mean_20d'] + (2 * std_20d)
             group['bb_lower'] = group['rolling_mean_20d'] - (2 * std_20d)
             
-            # Since corr/volatility requires 2 data points, we drop rows that still have NaNs there
-            # (which is only the first 1-2 rows depending on min_periods)
-            group = group.dropna(subset=['corr_dxy_20d', 'corr_cny_20d', 'volatility_20d'])
+            # volatility needs at least 2 data points; drop rows where it's NaN
+            # corr_dxy/corr_cny may be NaN for zero-variance pairs (e.g., VND pegged to USD);
+            # those get stored as None and handled gracefully by the frontend
+            group = group.dropna(subset=['volatility_20d'])
+            group['corr_dxy_20d'] = group['corr_dxy_20d'].fillna(0.0)
+            group['corr_cny_20d'] = group['corr_cny_20d'].fillna(0.0)
             features_list.append(group)
             
         if not features_list:

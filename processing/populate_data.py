@@ -26,7 +26,7 @@ df = df.sort_values(by=['currency_pair', 'ts']).reset_index(drop=True)
 # 3. Pisahkan Data DXY dan CNY/USD untuk Perhitungan Korelasi
 print("Menyiapkan data pembanding DXY dan CNY...")
 df_dxy = df[df['currency_pair'] == 'DXY'][['ts', 'close']].rename(columns={'close': 'close_dxy'})
-df_cny = df[df['currency_pair'] == 'CNY/USD'][['ts', 'close']].rename(columns={'close': 'close_cny'})
+df_cny = df[df['currency_pair'].isin(['CNY/USD', 'CNY'])][['ts', 'close']].rename(columns={'close': 'close_cny'})
 
 # Gabungkan pembanding ke dataframe utama
 df = pd.merge(df, df_dxy, on='ts', how='left')
