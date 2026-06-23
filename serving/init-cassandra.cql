@@ -59,7 +59,7 @@ CREATE TABLE IF NOT EXISTS clustering_metrics (
   labels_order TEXT
 );
 
--- Tabel 4B: notifications (untuk real-time notifikasi)
+-- Tabel 4B: notifications (untuk real-time notifikasi, termasuk alert)
 CREATE TABLE IF NOT EXISTS notifications (
     bucket TEXT,
     ts TIMESTAMP,
@@ -67,6 +67,8 @@ CREATE TABLE IF NOT EXISTS notifications (
     type TEXT,
     title TEXT,
     message TEXT,
+    severity TEXT,
+    category TEXT,
     batch_id TEXT,
     algorithm TEXT,
     PRIMARY KEY ((bucket), ts, id)

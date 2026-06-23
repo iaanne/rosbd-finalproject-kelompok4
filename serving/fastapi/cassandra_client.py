@@ -96,8 +96,8 @@ def init():
     )
 
     _notification_insert = _session.prepare(
-        "INSERT INTO notifications (bucket, ts, id, type, title, message, batch_id, algorithm) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+        "INSERT INTO notifications (bucket, ts, id, type, title, message, severity, category, batch_id, algorithm) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
     )
     _notification_select = _session.prepare(
         "SELECT * FROM notifications WHERE bucket = ? ORDER BY ts DESC LIMIT ?"
@@ -208,7 +208,8 @@ def insert_notification(notif: dict):
             _notification_insert,
             (
                 bucket, ts, notif_id,
-                notif["type"], notif["title"], notif["message"],
+                notif.get("type", ""), notif.get("title", ""), notif.get("message", ""),
+                notif.get("severity", ""), notif.get("category", ""),
                 notif.get("batch_id", ""), notif.get("algorithm", ""),
             ),
         )
@@ -337,4 +338,27 @@ def get_clustering_metrics(batch_id: str):
         return [dict(r) for r in rows]
     except Exception as e:
         logger.error("Error fetching clustering metrics: %s", e)
+        return []
+
+
+def get_latest_clustering_metrics():
+    try:
+        batch_rows = _session.execute(
+            "SELECT batch_id, ts FROM clustering_results LIMIT 100"
+        )
+        batches = {}
+        for r in batch_rows:
+            bid = r["batch_id"]
+            ts = r["ts"]
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=timezone.utc)
+            if bid not in batches or ts > batches[bid]:
+                batches[bid] = ts
+        if not batches:
+            return []
+        latest_batch = max(batches, key=lambda b: batches[b])
+        rows = _session.execute(_metrics_select, (latest_batch,))
+        return [dict(r) for r in rows]
+    except Exception as e:
+        logger.error("Error fetching latest clustering metrics: %s", e)
         return []

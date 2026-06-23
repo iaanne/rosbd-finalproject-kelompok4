@@ -5,7 +5,6 @@ import os
 from datetime import datetime, timezone
 from aiokafka import AIOKafkaConsumer
 
-from cassandra_client import insert_forex_rate
 from main import run_compute_features_logic
 from notifications import manager
 import email_client
@@ -64,14 +63,14 @@ async def start_kafka_consumer():
                             "volume": int(payload.get("volume", 0))
                         }
                         
-                        # 2. Insert into Cassandra
-                        insert_forex_rate(forex_data)
+                        # 2. Insert into Cassandra — di-comment karena Bab 3.2.2: Spark (Laptop 2) penulis forex_rates
+                        # insert_forex_rate(forex_data)
                         
                         # 3. Broadcast to WebSocket clients
                         # Format timestamp as string for JSON serialization
                         websocket_payload = forex_data.copy()
                         websocket_payload["ts"] = ts.isoformat()
-                        await manager.broadcast_forex_update(websocket_payload)
+                        await manager.broadcast_price_update(websocket_payload)
                         
                         # 4. Trigger feature calculation asynchronously in thread pool (non-blocking)
                         asyncio.create_task(asyncio.to_thread(run_compute_features_logic))

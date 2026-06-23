@@ -31,6 +31,8 @@ from cassandra_client import (
     get_all_features,
     get_latest_clustering_summary,
     insert_clustering_metrics,
+    get_clustering_metrics,
+    get_latest_clustering_metrics,
 )
 from elasticsearch_client import (
     init as es_init,
@@ -54,31 +56,32 @@ def run_compute_features_logic():
         if not rates:
             logger.warning("No forex rates found in database. Cannot compute features.")
             return 0
-            
+
         df = pd.DataFrame(rates)
+        df['ts'] = pd.to_datetime(df['ts'])
         df = df.sort_values(by=['currency_pair', 'ts']).reset_index(drop=True)
-        
-        # Round timestamps to 1 minute to align asynchronous updates
-        df['ts_round'] = pd.to_datetime(df['ts']).dt.round('1min')
-        
-        # Extract DXY and CNY/USD
-        df_dxy = df[df['currency_pair'] == 'DXY'][['ts_round', 'close']].rename(columns={'close': 'close_dxy'}).drop_duplicates(subset=['ts_round'])
-        df_cny = df[df['currency_pair'].isin(['CNY/USD', 'CNY'])][['ts_round', 'close']].rename(columns={'close': 'close_cny'}).drop_duplicates(subset=['ts_round'])
-        
-        if df_dxy.empty or df_cny.empty:
-            logger.warning("Missing DXY or CNY data in forex_rates. DXY count: %d, CNY count: %d", len(df_dxy), len(df_cny))
-            if df_dxy.empty:
-                df_dxy = pd.DataFrame({'ts_round': df['ts_round'].unique(), 'close_dxy': 100.0})
-            if df_cny.empty:
-                df_cny = pd.DataFrame({'ts_round': df['ts_round'].unique(), 'close_cny': 7.0})
-                
-        df = pd.merge(df, df_dxy, on='ts_round', how='left')
-        df = pd.merge(df, df_cny, on='ts_round', how='left')
-        
-        df['close_dxy'] = df.groupby('currency_pair')['close_dxy'].ffill()
-        df['close_cny'] = df.groupby('currency_pair')['close_cny'].ffill()
-        df['close_dxy'] = df.groupby('currency_pair')['close_dxy'].bfill()
-        df['close_cny'] = df.groupby('currency_pair')['close_cny'].bfill()
+
+        # Resample intraday 1m → daily: ambil close terakhir tiap hari per pair
+        df['date'] = df['ts'].dt.date
+        daily = df.groupby(['currency_pair', 'date']).agg({
+            'open': 'first', 'high': 'max', 'low': 'min',
+            'close': 'last', 'volume': 'sum', 'ts': 'last'
+        }).reset_index().sort_values(['currency_pair', 'ts'])
+        daily.drop(columns=['date'], inplace=True)
+
+        # Extract DXY dan CNY daily close untuk korelasi
+        dxy = daily[daily['currency_pair'] == 'DXY'][['ts', 'close']].rename(columns={'close': 'close_dxy'})
+        cny = daily[daily['currency_pair'].isin(['CNY/USD', 'CNY'])][['ts', 'close']].rename(columns={'close': 'close_cny'})
+
+        if dxy.empty:
+            dxy = pd.DataFrame({'ts': daily['ts'].unique(), 'close_dxy': 100.0})
+        if cny.empty:
+            cny = pd.DataFrame({'ts': daily['ts'].unique(), 'close_cny': 7.0})
+
+        daily = pd.merge(daily, dxy, on='ts', how='left')
+        daily = pd.merge(daily, cny, on='ts', how='left')
+        daily['close_dxy'] = daily.groupby('currency_pair')['close_dxy'].ffill().bfill()
+        daily['close_cny'] = daily.groupby('currency_pair')['close_cny'].ffill().bfill()
 
         def compute_rsi(series, period=14):
             delta = series.diff()
@@ -88,15 +91,15 @@ def run_compute_features_logic():
             return 100 - (100 / (1 + rs))
 
         features_list = []
-        for pair, group in df.groupby('currency_pair'):
+        for pair, group in daily.groupby('currency_pair'):
             if pair in ['DXY', 'CNY/USD', 'CNY', 'Gold']:
                 continue
-                
-            group = group.sort_values(by='ts').copy()
+
+            group = group.sort_values('ts').copy()
             if len(group) < 2:
-                logger.warning("Currency pair %s has only %d data points. Rolling features require at least 2. Skipping.", pair, len(group))
+                logger.warning("Currency pair %s has only %d data points. Need daily data >= 2.", pair, len(group))
                 continue
-                
+
             group['returns_1d'] = group['close'].pct_change(1)
             group['log_return'] = np.log(group['close'] / group['close'].shift(1))
             group['rolling_mean_5d'] = group['close'].rolling(5, min_periods=1).mean()
@@ -106,26 +109,23 @@ def run_compute_features_logic():
             group['corr_dxy_20d'] = group['log_return'].rolling(20, min_periods=2).corr(group['close_dxy'].pct_change().fillna(0))
             group['corr_cny_20d'] = group['log_return'].rolling(20, min_periods=2).corr(group['close_cny'].pct_change().fillna(0))
             group['rsi_14'] = compute_rsi(group['close'], 14)
-            
+
             std_20d = group['close'].rolling(20, min_periods=2).std()
             group['bb_upper'] = group['rolling_mean_20d'] + (2 * std_20d)
             group['bb_lower'] = group['rolling_mean_20d'] - (2 * std_20d)
-            
-            # volatility needs at least 2 data points; drop rows where it's NaN
-            # corr_dxy/corr_cny may be NaN for zero-variance pairs (e.g., VND pegged to USD);
-            # those get stored as None and handled gracefully by the frontend
+
             group = group.dropna(subset=['volatility_20d'])
-            group['corr_dxy_20d'] = group['corr_dxy_20d'].fillna(0.0).clip(-1, 1)
-            group['corr_cny_20d'] = group['corr_cny_20d'].fillna(0.0).clip(-1, 1)
+            group['corr_dxy_20d'] = group['corr_dxy_20d'].clip(-1, 1)
+            group['corr_cny_20d'] = group['corr_cny_20d'].clip(-1, 1)
             features_list.append(group)
-            
+
         if not features_list:
-            logger.warning("No feature rows computed.")
+            logger.warning("No feature rows computed. Ensure backfill_historical.py has been run for daily data.")
             return 0
-            
+
         df_features = pd.concat(features_list).reset_index(drop=True)
         df_features = df_features.replace([np.inf, -np.inf], np.nan)
-        
+
         inserted_count = 0
         for _, row in df_features.iterrows():
             insert_feature({
@@ -144,8 +144,8 @@ def run_compute_features_logic():
                 "bb_lower": float(row['bb_lower']) if not pd.isna(row['bb_lower']) else None
             })
             inserted_count += 1
-            
-        logger.info("Successfully computed and inserted %d features.", inserted_count)
+
+        logger.info("Successfully computed and inserted %d features (resampled daily).", inserted_count)
         return inserted_count
     except Exception as e:
         logger.error("Error in run_compute_features_logic: %s", e)
@@ -193,7 +193,7 @@ async def run_clustering_logic():
 
         # ── Helper: relabel arbitrary cluster IDs to canonical 0/1/2 ──
         def relabel_by_centroid(labels_raw):
-            """Map each cluster to 0 (highest mean corr_dxy), 2 (highest mean corr_cny), 1 (remaining)."""
+            """Map each cluster: 0 (highest corr_dxy → Pro-Dollar), 2 (lowest corr_dxy → Yuan), 1 (remaining → Transisi)."""
             unique = sorted(set(labels_raw) - {-1})
             if len(unique) < 2:
                 return [1] * len(labels_raw)
@@ -202,8 +202,8 @@ async def run_clustering_logic():
                 for c in unique
             ])
             order = sorted(range(len(unique)), key=lambda i: (centroids_[i, 0], centroids_[i, 1]))
-            c0 = unique[order[0]]
-            c2 = unique[order[-1]]
+            c0 = unique[order[-1]]   # highest corr_dxy → Pro-Dollar
+            c2 = unique[order[0]]    # lowest corr_dxy  → Yuan
             c1 = unique[order[1]] if len(order) >= 3 else unique[0]
             mapping = {c0: 0, c1: 1, c2: 2}
             return [mapping.get(l, 1) if l != -1 else 1 for l in labels_raw]
@@ -214,13 +214,13 @@ async def run_clustering_logic():
         centroid_order = sorted(range(k), key=lambda i: (centroids[i, 0], centroids[i, 1]))
         km_label_map = {}
         if k >= 1:
-            km_label_map[centroid_order[0]] = 0       # Pro-Dollar
+            km_label_map[centroid_order[-1]] = 0      # highest corr_dxy → Pro-Dollar
         if k >= 2:
-            km_label_map[centroid_order[1]] = 1       # Transisi
+            km_label_map[centroid_order[0]] = 2       # lowest corr_dxy → Yuan
         if k >= 3:
-            km_label_map[centroid_order[2]] = 2       # Yuan
+            km_label_map[centroid_order[1]] = 1       # middle corr_dxy → Transisi
         elif k == 2:
-            km_label_map[centroid_order[1]] = 1       # only 2 clusters → Transisi + Pro-Dollar
+            km_label_map[centroid_order[0]] = 1       # only 2 clusters → both in Transisi (no pure Yuan)
         km_labels = [km_label_map.get(l, 1) for l in km_labels]
 
         db_labels = relabel_by_centroid(db_labels_raw)
@@ -313,8 +313,30 @@ async def run_clustering_logic():
                 for r in latest_results.values()
             ],
         }
-        await manager.broadcast_clustering_done(broadcast_data)
-        await manager.broadcast_notification(notif_data)
+        outliers = [r for r in latest_results.values() if r["is_outlier"] and r["currency_pair"] not in ("DXY", "CNY")]
+        for o in outliers:
+            alert_msg = {
+                "severity": "high",
+                "category": "outlier",
+                "title": f"Outlier terdeteksi: {o['currency_pair']}",
+                "message": f"{o['currency_pair']} terklasifikasi sebagai outlier — volatility di luar normal.",
+                "ts": datetime.now(timezone.utc).isoformat(),
+            }
+            await manager.broadcast_alert(alert_msg)
+            insert_notification({
+                "id": str(uuid.uuid4()),
+                "ts": datetime.now(timezone.utc),
+                "type": "alert",
+                "title": alert_msg["title"],
+                "message": alert_msg["message"],
+                "severity": alert_msg["severity"],
+                "category": alert_msg["category"],
+                "batch_id": batch_id,
+                "algorithm": "DBSCAN",
+            })
+
+        broadcast_data["outliers"] = [r["currency_pair"] for r in outliers]
+        await manager.broadcast_system({**broadcast_data, "message": notif_data["message"]})
 
         idr_latest = latest_results.get("IDR") or latest_results.get("IDR/USD")
         if idr_latest and idr_latest["is_outlier"]:
@@ -472,7 +494,7 @@ async def handle_data_update(payload: DataUpdateIn, background_tasks: Background
         if payload.type == "forex_update":
             data = ForexUpdateData(**payload.data)
             insert_forex_rate(data.model_dump())
-            await manager.broadcast_forex_update(data.model_dump())
+            await manager.broadcast_price_update(data.model_dump())
             
             # Trigger feature calculation in background
             background_tasks.add_task(run_compute_features_logic)
@@ -523,8 +545,13 @@ async def handle_data_update(payload: DataUpdateIn, background_tasks: Background
                 "algorithm": data.algorithm,
             }
             insert_notification(notif_data)
-            await manager.broadcast_clustering_done(data.model_dump())
-            await manager.broadcast_notification(notif_data)
+            await manager.broadcast_system({
+                "batch_id": data.batch_id,
+                "algorithm": data.algorithm,
+                "silhouette_score": data.silhouette_score,
+                "message": notif_data["message"],
+                "ts": notif_data["ts"].isoformat() if hasattr(notif_data["ts"], 'isoformat') else str(notif_data["ts"]),
+            })
 
         else:
             raise HTTPException(status_code=400, detail=f"Unknown type: {payload.type}")
@@ -599,6 +626,16 @@ def create_clustering_result(data: ClusteringResultIn):
 @app.get("/api/clustering/latest")
 def read_latest_clustering():
     return get_latest_clustering_summary()
+
+
+@app.get("/api/clustering-metrics/latest")
+def read_latest_clustering_metrics():
+    return get_latest_clustering_metrics()
+
+
+@app.get("/api/clustering-metrics/{batch_id}")
+def read_clustering_metrics(batch_id: str):
+    return get_clustering_metrics(batch_id)
 
 
 @app.get("/api/batches")

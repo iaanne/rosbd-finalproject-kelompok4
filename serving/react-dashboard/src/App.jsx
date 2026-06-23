@@ -119,6 +119,106 @@ function ScatterPlot({ data, features }) {
   )
 }
 
+function Dendrogram({ features, cluster }) {
+  if (!features || !cluster || !cluster.length) return <div className="text-sm text-text-soft py-2">Belum ada data</div>
+  const pts = cluster.map(c => {
+    const featArr = (features || {})[c.currency_pair] || []
+    const fd = featArr.length ? featArr[0] : {}
+    return { pair: c.currency_pair, x: fd.corr_dxy_20d ?? 0.5, y: fd.corr_cny_20d ?? 0.3 }
+  }).filter(p => p.x != null && p.y != null)
+  if (pts.length < 2) return <div className="text-sm text-text-soft py-2">Data belum cukup untuk dendrogram</div>
+
+  // Compute pairwise Euclidean distances
+  const dist = (a, b) => Math.sqrt((a.x - b.x) ** 2 + (a.y - b.y) ** 2)
+  const N = pts.length
+  let clusters = pts.map((p, i) => ({ indices: [i], id: i }))
+  const merges = []
+  let nextId = N
+  const active = clusters.map(c => c)
+
+  while (active.length > 1) {
+    let minD = Infinity, minI = -1, minJ = -1
+    for (let i = 0; i < active.length; i++) {
+      for (let j = i + 1; j < active.length; j++) {
+        let d = 0
+        for (const ii of active[i].indices) {
+          for (const jj of active[j].indices) {
+            d += dist(pts[ii], pts[jj])
+          }
+        }
+        d /= (active[i].indices.length * active[j].indices.length)
+        if (d < minD) { minD = d; minI = i; minJ = j }
+      }
+    }
+    const merged = { indices: [...active[minI].indices, ...active[minJ].indices], id: nextId++ }
+    merges.push({ left: active[minI].id, right: active[minJ].id, dist: minD, leftSize: active[minI].indices.length, rightSize: active[minJ].indices.length })
+    active.splice(minJ, 1)
+    active.splice(minI, 1, merged)
+  }
+
+  const maxDist = Math.max(...merges.map(m => m.dist)) || 1
+  const W = 320, H = 200, PAD = 30, LABEL_W = 50
+
+  // Build parent map: for each merge, record its result id
+  const parentMap = {}
+  merges.forEach((m, idx) => {
+    const resultId = N + idx
+    parentMap[m.left] = resultId
+    parentMap[m.right] = resultId
+  })
+
+  // Compute leaf order via in-order traversal from root
+  const leafOrder = []
+  const traverse = (id) => {
+    if (id < N) { leafOrder.push(id); return }
+    const m = merges[id - N]
+    if (m) { traverse(m.left); traverse(m.right) }
+  }
+  if (merges.length) traverse(N + merges.length - 1)
+
+  const leafMap = {}
+  leafOrder.forEach((id, i) => { leafMap[id] = i })
+
+  const treeH = H - 2 * PAD
+  let lines = []
+  for (const m of merges) {
+    const getLeaves = (id) => {
+      if (id < N) return [id]
+      const mm = merges[id - N]
+      return mm ? [...getLeaves(mm.left), ...getLeaves(mm.right)] : []
+    }
+    const lLeaves = getLeaves(m.left)
+    const rLeaves = getLeaves(m.right)
+    const lx = LABEL_W + (leafMap[lLeaves[0]] + leafMap[lLeaves[lLeaves.length-1]]) / 2 * ((W - LABEL_W - PAD) / (N - 1))
+    const rx = LABEL_W + (leafMap[rLeaves[0]] + leafMap[rLeaves[rLeaves.length-1]]) / 2 * ((W - LABEL_W - PAD) / (N - 1))
+    const my = H - PAD - (m.dist / maxDist) * treeH
+    const by = H - PAD
+    // Vertical lines for left and right subtrees
+    for (const leaf of lLeaves) {
+      const lx2 = LABEL_W + leafMap[leaf] * ((W - LABEL_W - PAD) / (N - 1))
+      lines.push({ x1: lx2, y1: by, x2: lx2, y2: my, stroke: 'rgba(255,255,255,0.2)' })
+    }
+    for (const leaf of rLeaves) {
+      const rx2 = LABEL_W + leafMap[leaf] * ((W - LABEL_W - PAD) / (N - 1))
+      lines.push({ x1: rx2, y1: by, x2: rx2, y2: my, stroke: 'rgba(255,255,255,0.2)' })
+    }
+    // Horizontal merge line
+    lines.push({ x1: lx, y1: my, x2: rx, y2: my, stroke: 'rgba(255,255,255,0.5)' })
+  }
+
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} width="100%" style={{ maxHeight: H }}>
+      {lines.map((l, i) => <line key={i} {...l} strokeWidth="1.5" />)}
+      {pts.map((p, i) => {
+        const lfIdx = leafMap[i]
+        return (
+          <text key={p.pair} x={LABEL_W + lfIdx * ((W - LABEL_W - PAD) / (N - 1))} y={H - 6} fontSize="8" fill="#fff" textAnchor="end" transform={`rotate(-45 ${LABEL_W + lfIdx * ((W - LABEL_W - PAD) / (N - 1))} ${H - 6})`}>{p.pair}</text>
+        )
+      })}
+    </svg>
+  )
+}
+
 function TrendChart({ features }) {
   if (!features || features.length < 2) return <div className="text-sm text-text-soft py-2">Data features IDR belum cukup</div>
   const W = 400, H = 200, PAD = 30
@@ -172,6 +272,7 @@ export default function App() {
   const [features, setFeatures] = useState({})
   const [cluster, setCluster] = useState([])
   const [notifs, setNotifs] = useState([])
+  const [metrics, setMetrics] = useState({})
   const [ikrVal, setIkrVal] = useState(50)
   const [ikrLabel, setIkrLabel] = useState('Sedang')
   const [ikrChip, setIkrChip] = useState('orange')
@@ -207,6 +308,14 @@ export default function App() {
     setFeatures(allFeats)
     const n = await api('/api/notifications?limit=10')
     setNotifs(n || [])
+    const m = await api('/api/clustering-metrics/latest')
+    if (m && m.length) {
+      setMetrics({
+        'K-Means': m[0].kmeans_silhouette,
+        'DBSCAN': m[0].dbscan_silhouette,
+        'AHC': m[0].ahc_silhouette,
+      })
+    }
     const [ik, il, ic] = buildIKR(fidr, latestCluster)
     setIkrVal(ik); setIkrLabel(il); setIkrChip(ic)
     setTime(new Date())
@@ -223,15 +332,21 @@ export default function App() {
       ws.onmessage = (e) => {
         try {
           const msg = JSON.parse(e.data)
-          if (msg) {
+          if (!msg) return
+          if (msg.type === 'price_update') {
+            load()
+          } else if (msg.type === 'alert') {
             const notif = {
-              type: msg.type || 'notification',
-              title: msg.title || msg.message || 'Update',
+              type: 'alert',
+              title: msg.title || 'Alert',
               message: msg.message || '',
               ts: msg.ts || new Date().toISOString(),
+              severity: msg.severity || 'info',
+              category: msg.category || 'general',
             }
             setNotifs(prev => [notif, ...prev].slice(0, 10))
-            if (msg.type === 'clustering_done') load()
+          } else if (msg.type === 'system') {
+            if (msg.batch_id) load()
           }
         } catch {}
       }
@@ -250,22 +365,23 @@ export default function App() {
     return arr.length ? arr[0] : {}
   }
 
+  // API returns forex_rates ORDER BY ts DESC (newest first)
   const cny = forex.CNY || []
-  const cnyCur = cny.length ? (cny[cny.length - 1].close || cny[cny.length - 1].open) : null
-  const cnyPrev = cny.length >= 2 ? (cny[cny.length - 2].close || cny[cny.length - 2].open) : cnyCur
+  const cnyCur = cny.length ? (cny[0].close || cny[0].open) : null
+  const cnyPrev = cny.length >= 2 ? (cny[1].close || cny[1].open) : cnyCur
 
   const cells = []
   for (const p of PAIRS) {
     const d = forex[p] || []
-    const cur = d.length ? (d[d.length - 1].close || d[d.length - 1].open) : null
-    const prev = d.length >= 2 ? (d[d.length - 2].close || d[d.length - 2].open) : cur
+    const cur = d.length ? (d[0].close || d[0].open) : null
+    const prev = d.length >= 2 ? (d[1].close || d[1].open) : cur
     const pct = (cur && prev) ? ((cur - prev) / prev * 100) : null
     cells.push(<TC key={`usd-${p}`} sym={`${p}/USD`} price={cur} pct={pct} />)
   }
   for (const p of PAIRS) {
     const d = forex[p] || []
-    const cur = d.length ? (d[d.length - 1].close || d[d.length - 1].open) : null
-    const prev = d.length >= 2 ? (d[d.length - 2].close || d[d.length - 2].open) : cur
+    const cur = d.length ? (d[0].close || d[0].open) : null
+    const prev = d.length >= 2 ? (d[1].close || d[1].open) : cur
     let cross = null, crossPct = null
     if (cur != null && cnyCur != null) {
       cross = cur / cnyCur
@@ -276,8 +392,8 @@ export default function App() {
   }
   for (const p of ['CNY', 'DXY']) {
     const d = forex[p] || []
-    const cur = d.length ? (d[d.length - 1].close || d[d.length - 1].open) : null
-    const prev = d.length >= 2 ? (d[d.length - 2].close || d[d.length - 2].open) : cur
+    const cur = d.length ? (d[0].close || d[0].open) : null
+    const prev = d.length >= 2 ? (d[1].close || d[1].open) : cur
     const pct = (cur && prev) ? ((cur - prev) / prev * 100) : null
     cells.push(<TC key={p} sym={p === 'CNY' ? 'CNY/USD' : 'DXY'} price={cur} pct={pct} />)
   }
@@ -305,37 +421,44 @@ export default function App() {
       { l: 'Sinyal hedging aktif', v: String(hedges.length), c: hedges.length ? hedges.join(', ') : 'Tidak ada' },
     ]
   } else {
-    const total = cluster.length || 6
+    const ASEAN6 = cluster.filter(c => !['DXY', 'CNY'].includes(c.currency_pair))
+    const total = ASEAN6.length || 6
     let idrRank = 1
-    const ranked = [...cluster].sort((a, b) => (b.cluster_label === 2) - (a.cluster_label === 2) || (b.is_outlier ? 1 : 0) - (a.is_outlier ? 1 : 0))
+    const ranked = [...ASEAN6].sort((a, b) => (b.cluster_label === 2) - (a.cluster_label === 2) || (b.is_outlier ? 1 : 0) - (a.is_outlier ? 1 : 0))
     for (let i = 0; i < ranked.length; i++) { if (ranked[i].currency_pair === 'IDR') { idrRank = i + 1; break } }
     const idrCl = cluster.find(c => c.currency_pair === 'IDR')
-    const corr = features.IDR?.length ? features.IDR[0].corr_dxy_20d : null
-    const corrC = corr != null ? (corr > 0 ? '▲ naik' : '▼ turun') : '-'
+    const fidr = features.IDR || []
+    const corrCur = fidr.length ? fidr[0].corr_dxy_20d : null
+    const corrPrev = fidr.length >= 2 ? fidr[1].corr_dxy_20d : corrCur
+    const corrDelta = (corrCur != null && corrPrev != null) ? corrCur - corrPrev : null
+    const corrV = corrDelta != null ? fmt(corrDelta) : (corrCur != null ? fmt(corrCur) : '—')
+    const corrC = corrDelta != null ? (corrDelta > 0 ? '▲ naik' : '▼ turun') : (corrCur != null ? (corrCur > 0 ? 'positif' : 'negatif') : '-')
     const status = idrCl?.is_outlier ? 'Kritis' : ikrVal >= 45 ? 'Waspada' : 'Aman'
     const statusC = idrCl?.is_outlier ? 'red' : ikrVal >= 45 ? 'orange' : 'green'
     kpiCards = [
       { l: 'Indeks Kerentanan IDR', v: String(ikrVal), c: <Chip text={ikrLabel} kind={ikrChip} /> },
       { l: 'Ranking IDR', v: `#${idrRank} / ${total}`, c: `paling rentan ke-${idrRank} ASEAN` },
-      { l: 'Δ corr_dxy IDR', v: fmt(corr), c: corrC },
+      { l: 'Δ corr_dxy IDR', v: corrV, c: corrC },
       { l: 'Status alert IDR', v: '—', c: <Chip text={status} kind={statusC} /> },
     ]
   }
 
+  const BENCHMARKS = ['DXY', 'CNY']
   const alertPairs = []
   for (const c of cluster) {
+    if (BENCHMARKS.includes(c.currency_pair)) continue
     const fd = fxFeat(c.currency_pair)
     const vol = fd.volatility_20d || 0
     if (c.is_outlier || vol > 0.5) {
       alertPairs.push({ pair: c.currency_pair, label: c.is_outlier ? '⚠ outlier' : '↗ volatile' })
     }
   }
-  const calloutType = isInv ? (cluster.some(c => c.is_outlier) ? 'kritis' : alertPairs.length ? 'warn' : null) : null
+  const calloutType = isInv ? (cluster.some(c => c.is_outlier && !BENCHMARKS.includes(c.currency_pair)) ? 'kritis' : alertPairs.length ? 'warn' : null) : null
 
   const ranked = [...cluster].sort((a, b) => (b.cluster_label === 2) - (a.cluster_label === 2) || (b.is_outlier ? 1 : 0) - (a.is_outlier ? 1 : 0))
 
-  const iconMap = { cluster_change: '⚠', clustering_done: '◉', outlier: '◉', high_volatility: '↗', forex_update: '↗', notification: 'ℹ', info: 'ℹ' }
-  const kindMap = { cluster_change: 'red', clustering_done: 'orange', outlier: 'orange', high_volatility: 'orange', forex_update: 'blue', notification: 'blue', info: 'blue' }
+  const iconMap = { cluster_change: '⚠', clustering_done: '◉', outlier: '◉', high_volatility: '↗', forex_update: '↗', notification: 'ℹ', info: 'ℹ', alert: '⚠' }
+  const kindMap = { cluster_change: 'red', clustering_done: 'orange', outlier: 'orange', high_volatility: 'orange', forex_update: 'blue', notification: 'blue', info: 'blue', alert: 'red' }
   const bgMap = { red: ['rgba(233,115,102,.08)', '#E97366'], orange: ['rgba(222,146,85,.08)', '#DE9255'], blue: ['rgba(94,159,232,.1)', '#5E9FE8'] }
 
   return (
@@ -445,7 +568,7 @@ export default function App() {
             </div>
             {ranked.length > 0 && (
               <ul className="list-none p-0 mt-2.5">
-                {ranked.slice(0, 6).map((c, i) => (
+                {ranked.map((c, i) => (
                   <li key={c.currency_pair} className={`flex justify-between text-sm py-1.5 border-b border-border-soft last:border-b-0 ${c.currency_pair === 'IDR' ? 'font-bold text-blue-brand' : 'text-text-soft'}`}>
                     <span>{i + 1}. {c.currency_pair}</span>
                     <span>{c.cluster_name || CLUSTER_NAMES[c.cluster_label] || '-'}</span>
@@ -453,6 +576,29 @@ export default function App() {
                 ))}
               </ul>
             )}
+          </div>
+        </div>
+
+        <div className="grid grid-cols-12 gap-3.5 mb-3.5">
+          <div className="col-span-7 max-lg:col-span-12 border border-border-soft rounded-xl bg-surface shadow-lg p-4">
+            <h3 className="text-sm font-semibold m-0 mb-0.5">Dendrogram AHC</h3>
+            <p className="text-xs text-text-soft m-0 mb-3">Hierarki kedekatan antar mata uang berdasarkan corr_dxy & corr_cny.</p>
+            <Dendrogram features={features} cluster={cluster} />
+          </div>
+          <div className="col-span-5 max-lg:col-span-12 border border-border-soft rounded-xl bg-surface shadow-lg p-4">
+            <h3 className="text-sm font-semibold m-0 mb-0.5">Metrik Clustering</h3>
+            <p className="text-xs text-text-soft m-0 mb-3">Silhouette score tiap algoritma — semakin tinggi semakin baik.</p>
+            <div className="text-sm text-text-soft space-y-2">
+              {['K-Means', 'DBSCAN', 'AHC'].map(a => {
+                const v = metrics[a]
+                return (
+                  <div className="flex justify-between py-1" key={a}>
+                    <span>{a}</span>
+                    <span className="font-semibold">{v != null ? fmt(v, 3) : '—'}</span>
+                  </div>
+                )
+              })}
+            </div>
           </div>
         </div>
 
@@ -473,8 +619,10 @@ export default function App() {
             <p className="text-xs text-text-soft m-0 mb-3">
               {isInv ? 'Trigger rebalancing / hedging.' : 'Trigger evaluasi intervensi.'}
             </p>
-            {notifs.length > 0 ? (
-              notifs.slice(0, 8).map((n, i) => {
+            {(() => {
+              const alerts = notifs.filter(n => n.type === 'alert')
+              return alerts.length > 0 ? (
+              alerts.slice(0, 8).map((n, i) => {
                 const ntype = n.type || 'info'
                 const k = kindMap[ntype] || 'blue'
                 const [bg, fg] = bgMap[k]
@@ -503,8 +651,9 @@ export default function App() {
                 )
               })
             ) : (
-              <div className="text-sm text-text-soft py-2">Belum ada notifikasi</div>
-            )}
+              <div className="text-sm text-text-soft py-2">Tidak ada alert</div>
+            )
+            })()}
           </div>
         </div>
 
@@ -515,40 +664,40 @@ export default function App() {
               {isInv ? 'Mata uang yang harus diwaspadai sebelum mengambil posisi.' : 'Deteksi tekanan tak normal pada IDR & kawasan.'}
             </p>
           </div>
-          {cluster.length > 0 ? (
-            <table className="w-full border-collapse">
-              <thead>
-                <tr>
-                  <th className="text-left px-3.5 py-2.5 text-xs text-text-soft border-b border-border-soft font-semibold bg-surface-hover">Mata uang</th>
-                  <th className="text-left px-3.5 py-2.5 text-xs text-text-soft border-b border-border-soft font-semibold bg-surface-hover">Cluster</th>
-                  <th className="text-left px-3.5 py-2.5 text-xs text-text-soft border-b border-border-soft font-semibold bg-surface-hover">corr_dxy</th>
-                  <th className="text-left px-3.5 py-2.5 text-xs text-text-soft border-b border-border-soft font-semibold bg-surface-hover">corr_cny</th>
-                  <th className="text-left px-3.5 py-2.5 text-xs text-text-soft border-b border-border-soft font-semibold bg-surface-hover">volatility</th>
-                  <th className="text-left px-3.5 py-2.5 text-xs text-text-soft border-b border-border-soft font-semibold bg-surface-hover">Status</th>
-                </tr>
-              </thead>
-              <tbody>
-                {cluster.map(c => {
-                  const fd = fxFeat(c.currency_pair)
-                  const cname = c.cluster_name || CLUSTER_NAMES[c.cluster_label] || '-'
-                  const cKind = c.cluster_label === 0 ? 'red' : c.cluster_label === 1 ? 'orange' : 'green'
-                  const sKind = c.is_outlier ? 'red' : 'gray'
-                  return (
-                    <tr key={c.currency_pair}>
-                      <td className="px-3.5 py-2.5 text-sm border-b border-border-soft"><strong>{c.currency_pair}</strong></td>
-                      <td className="px-3.5 py-2.5 text-sm border-b border-border-soft"><Chip text={cname} kind={cKind} /></td>
-                      <td className="px-3.5 py-2.5 text-sm border-b border-border-soft">{fmt(fd.corr_dxy_20d)}</td>
-                      <td className="px-3.5 py-2.5 text-sm border-b border-border-soft">{fmt(fd.corr_cny_20d)}</td>
-                      <td className="px-3.5 py-2.5 text-sm border-b border-border-soft">{fmt(fd.volatility_20d)}</td>
-                      <td className="px-3.5 py-2.5 text-sm border-b border-border-soft"><Chip text={c.is_outlier ? 'Outlier' : 'Normal'} kind={sKind} /></td>
-                    </tr>
-                  )
-                })}
-              </tbody>
-            </table>
-          ) : (
-            <div className="text-sm text-text-soft p-5">Belum ada data clustering — jalankan POST /api/run-clustering</div>
-          )}
+          {(() => {
+            const anomalies = cluster.filter(c => c.is_outlier && !['DXY', 'CNY'].includes(c.currency_pair))
+            return anomalies.length > 0 ? (
+              <table className="w-full border-collapse">
+                <thead>
+                  <tr>
+                    <th className="text-left px-3.5 py-2.5 text-xs text-text-soft border-b border-border-soft font-semibold bg-surface-hover">Mata uang</th>
+                    <th className="text-left px-3.5 py-2.5 text-xs text-text-soft border-b border-border-soft font-semibold bg-surface-hover">Cluster</th>
+                    <th className="text-left px-3.5 py-2.5 text-xs text-text-soft border-b border-border-soft font-semibold bg-surface-hover">corr_dxy</th>
+                    <th className="text-left px-3.5 py-2.5 text-xs text-text-soft border-b border-border-soft font-semibold bg-surface-hover">corr_cny</th>
+                    <th className="text-left px-3.5 py-2.5 text-xs text-text-soft border-b border-border-soft font-semibold bg-surface-hover">volatility</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {anomalies.map(c => {
+                    const fd = fxFeat(c.currency_pair)
+                    const cname = c.cluster_name || CLUSTER_NAMES[c.cluster_label] || '-'
+                    const cKind = c.cluster_label === 0 ? 'red' : c.cluster_label === 1 ? 'orange' : 'green'
+                    return (
+                      <tr key={c.currency_pair}>
+                        <td className="px-3.5 py-2.5 text-sm border-b border-border-soft"><strong>{c.currency_pair}</strong></td>
+                        <td className="px-3.5 py-2.5 text-sm border-b border-border-soft"><Chip text={cname} kind={cKind} /></td>
+                        <td className="px-3.5 py-2.5 text-sm border-b border-border-soft">{fmt(fd.corr_dxy_20d)}</td>
+                        <td className="px-3.5 py-2.5 text-sm border-b border-border-soft">{fmt(fd.corr_cny_20d)}</td>
+                        <td className="px-3.5 py-2.5 text-sm border-b border-border-soft">{fmt(fd.volatility_20d)}</td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            ) : (
+              <div className="text-sm text-text-soft p-5">Tidak ada anomali terdeteksi saat ini.</div>
+            )
+          })()}
         </div>
 
         <p className="text-xs text-text-faint text-center mt-6">

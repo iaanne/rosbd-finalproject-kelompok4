@@ -167,8 +167,8 @@ def relabel_by_centroid(labels_raw):
         for c in unique
     ])
     order = sorted(range(len(unique)), key=lambda i: (centroids_[i, 0], centroids_[i, 1]))
-    c0 = unique[order[0]]
-    c2 = unique[order[-1]]
+    c0 = unique[order[-1]]   # highest corr_dxy → Pro-Dollar
+    c2 = unique[order[0]]    # lowest corr_dxy  → Yuan
     c1 = unique[order[1]] if len(order) >= 3 else unique[0]
     mapping = {c0: 0, c1: 1, c2: 2}
     return [mapping.get(l, 1) if l != -1 else 1 for l in labels_raw]
@@ -178,9 +178,10 @@ centroids = kmeans.cluster_centers_
 k = len(centroids)
 centroid_order = sorted(range(k), key=lambda i: (centroids[i, 0], centroids[i, 1]))
 km_label_map = {}
-if k >= 1: km_label_map[centroid_order[0]] = 0
-if k >= 2: km_label_map[centroid_order[1]] = 1
-if k >= 3: km_label_map[centroid_order[2]] = 2
+if k >= 1: km_label_map[centroid_order[-1]] = 0      # highest corr_dxy → Pro-Dollar
+if k >= 2: km_label_map[centroid_order[0]] = 2       # lowest corr_dxy  → Yuan
+if k >= 3: km_label_map[centroid_order[1]] = 1       # middle corr_dxy → Transisi
+elif k == 2: km_label_map[centroid_order[0]] = 1     # only 2 clusters → Transisi
 km_labels = [km_label_map.get(l, 1) for l in km_labels_raw]
 
 db_labels = relabel_by_centroid(db_labels_raw)
