@@ -251,3 +251,51 @@ def get_all_features():
     except Exception as e:
         logger.error("Error fetching all features: %s", e)
         return []
+
+
+def get_latest_clustering_summary():
+    try:
+        rows = _session.execute(
+            "SELECT batch_id, ts, algorithm, currency_pair, cluster_label, cluster_name, is_outlier, silhouette_score "
+            "FROM clustering_results PER PARTITION LIMIT 1"
+        )
+        results = [dict(r) for r in rows]
+        if not results:
+            return {"status": "no_data", "message": "Belum ada hasil clustering.", "results": []}
+
+        latest_ts = max(r["ts"] for r in results)
+        now = datetime.now(timezone.utc)
+        if latest_ts.tzinfo is None:
+            latest_ts = latest_ts.replace(tzinfo=timezone.utc)
+        stale_threshold = 3600
+        is_stale = (now - latest_ts).total_seconds() > stale_threshold
+
+        summary = {}
+        latest_by_pair = {}
+        for r in results:
+            pair = r["currency_pair"]
+            ts = r["ts"]
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=timezone.utc)
+            if pair not in latest_by_pair or ts > latest_by_pair[pair]:
+                latest_by_pair[pair] = ts
+                summary[pair] = {
+                    "ts": ts.isoformat(),
+                    "currency_pair": pair,
+                    "cluster_label": r["cluster_label"],
+                    "cluster_name": r["cluster_name"],
+                    "is_outlier": r["is_outlier"],
+                    "algorithm": r["algorithm"],
+                    "silhouette_score": r["silhouette_score"],
+                }
+
+        return {
+            "status": "stale" if is_stale else "ok",
+            "latest_ts": latest_ts.isoformat(),
+            "is_stale": is_stale,
+            "message": "Data clustering basi — terakhir {}.".format(latest_ts.strftime('%d %b %H:%M UTC')) if is_stale else "Data clustering terkini.",
+            "results": list(summary.values()),
+        }
+    except Exception as e:
+        logger.error("Error fetching latest clustering summary: %s", e)
+        return {"status": "error", "message": str(e), "results": []}

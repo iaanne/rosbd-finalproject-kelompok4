@@ -3,6 +3,8 @@ import numpy as np
 from cassandra.cluster import Cluster
 import datetime
 import uuid
+from sklearn.cluster import KMeans, DBSCAN, AgglomerativeClustering
+from sklearn.metrics import silhouette_score
 
 # 1. Inisialisasi Koneksi Cassandra
 CASSANDRA_IP = "100.66.223.98"
@@ -67,9 +69,11 @@ for pair, group in df.groupby('currency_pair'):
     group['rolling_std_5d'] = group['close'].rolling(5).std()
     group['volatility_20d'] = group['log_return'].rolling(20).std()
     
-    # Hitung Korelasi 20 Hari terhadap DXY dan CNY
-    group['corr_dxy_20d'] = group['close'].rolling(20).corr(group['close_dxy'])
-    group['corr_cny_20d'] = group['close'].rolling(20).corr(group['close_cny'])
+    # Hitung Korelasi 20 Hari terhadap DXY dan CNY (pada return, bukan level)
+    group['dxy_return'] = group['close_dxy'].pct_change().fillna(0)
+    group['cny_return'] = group['close_cny'].pct_change().fillna(0)
+    group['corr_dxy_20d'] = group['log_return'].rolling(20).corr(group['dxy_return'])
+    group['corr_cny_20d'] = group['log_return'].rolling(20).corr(group['cny_return'])
     
     # Hitung RSI dan Bollinger Bands
     group['rsi_14'] = compute_rsi(group['close'], 14)
@@ -109,50 +113,96 @@ for _, row in df_features.iterrows():
         float(row['bb_lower']) if not pd.isna(row['bb_lower']) else None
     ))
 
-# 7. Jalankan Algoritma Klastering Sederhana (Rule-Based & Outlier Detection)
-print("Menjalankan analisis klastering & deteksi outlier...")
-clustering_results = []
+# 7. Jalankan Klastering dengan K-Means + DBSCAN + AHC
+print("Menjalankan K-Means + DBSCAN + AHC clustering...")
 batch_id = str(uuid.uuid4())[:8]
 
-# Hitung rata-rata volatilitas untuk threshold outlier
-mean_vol = df_features['volatility_20d'].mean()
+# Ambil data unik per currency_pair (snapshot terbaru)
+latest_ts = df_features.groupby('currency_pair')['ts'].max().reset_index()
+df_latest = pd.merge(latest_ts, df_features, on=['currency_pair', 'ts'], how='left')
+df_latest = df_latest.dropna(subset=['corr_dxy_20d', 'corr_cny_20d', 'volatility_20d'])
 
-for _, row in df_features.iterrows():
-    corr_dxy = row['corr_dxy_20d']
-    corr_cny = row['corr_cny_20d']
-    vol = row['volatility_20d']
-    
-    # Pengelompokan Klaster (Rule-Based)
-    if corr_dxy > 0.5 and corr_cny < 0.3:
-        label = 0
-        name = "Pro-Dollar"
-    elif corr_cny > 0.5 and corr_dxy < 0.3:
-        label = 2
-        name = "Mendekati Yuan"
-    else:
-        label = 1
-        name = "Transisi"
-        
-    # Deteksi Outlier (DBSCAN Simulation)
-    # Jika volatilitas 2.5x lebih besar dari rata-rata pasar
-    is_outlier = bool(vol > (mean_vol * 2.5))
-    
-    # Silhouette score dummy (berkisar 0.5 - 0.8 untuk data teratur)
-    silhouette = float(0.65 + 0.1 * np.sin(label))
+X = df_latest[['corr_dxy_20d', 'corr_cny_20d', 'volatility_20d']].values
+n = len(X)
 
-    clustering_results.append((
-        batch_id,
-        row['ts'],
-        "K-Means + DBSCAN",
-        row['currency_pair'],
-        label,
-        name,
-        is_outlier,
-        silhouette
-    ))
+print(f"Running clustering on {n} currency pairs...")
+
+# ── 1. K-Means (k=3) ────────────────────────────────
+kmeans = KMeans(n_clusters=min(3, n), random_state=42, n_init=10)
+km_labels_raw = kmeans.fit_predict(X)
+km_sil = silhouette_score(X, km_labels_raw) if n >= 4 and len(set(km_labels_raw)) > 1 else 0.0
+
+# ── 2. DBSCAN ────────────────────────────────────────
+dbscan = DBSCAN(eps=0.3, min_samples=2)
+db_labels_raw = dbscan.fit_predict(X)
+db_sil = silhouette_score(X, db_labels_raw) if n >= 4 and len(set(db_labels_raw)) > 1 else 0.0
+
+# ── 3. AHC ───────────────────────────────────────────
+ahc = AgglomerativeClustering(n_clusters=min(3, n))
+ahc_labels_raw = ahc.fit_predict(X)
+ahc_sil = silhouette_score(X, ahc_labels_raw) if n >= 4 and len(set(ahc_labels_raw)) > 1 else 0.0
+
+# ── Helper: relabel arbitrary cluster IDs to canonical 0/1/2 ──
+def relabel_by_centroid(labels_raw):
+    unique = sorted(set(labels_raw) - {-1})
+    if len(unique) < 2:
+        return [1] * len(labels_raw)
+    centroids_ = np.array([
+        [X[labels_raw == c, 0].mean(), X[labels_raw == c, 1].mean()]
+        for c in unique
+    ])
+    order = sorted(range(len(unique)), key=lambda i: (centroids_[i, 0], centroids_[i, 1]))
+    c0 = unique[order[0]]
+    c2 = unique[order[-1]]
+    c1 = unique[order[1]] if len(order) >= 3 else unique[0]
+    mapping = {c0: 0, c1: 1, c2: 2}
+    return [mapping.get(l, 1) if l != -1 else 1 for l in labels_raw]
+
+# ── Relabel K-Means ──────────────────────────────────
+centroids = kmeans.cluster_centers_
+k = len(centroids)
+centroid_order = sorted(range(k), key=lambda i: (centroids[i, 0], centroids[i, 1]))
+km_label_map = {}
+if k >= 1: km_label_map[centroid_order[0]] = 0
+if k >= 2: km_label_map[centroid_order[1]] = 1
+if k >= 3: km_label_map[centroid_order[2]] = 2
+km_labels = [km_label_map.get(l, 1) for l in km_labels_raw]
+
+db_labels = relabel_by_centroid(db_labels_raw)
+ahc_labels = relabel_by_centroid(ahc_labels_raw)
+
+name_map = {0: "Pro-Dollar", 1: "Transisi", 2: "Yuan"}
+mean_vol = df_latest['volatility_20d'].mean()
+
+clustering_results = []
+for algo_name, labels, sil_score in [
+    ("K-Means", km_labels, km_sil),
+    ("DBSCAN", db_labels, db_sil),
+    ("AHC", ahc_labels, ahc_sil),
+]:
+    for i, row in df_latest.iterrows():
+        canonical = int(labels[i]) if i < len(labels) else 1
+        if canonical not in (0, 1, 2):
+            canonical = 1
+        name = name_map.get(canonical, "Transisi")
+        is_outlier = bool(row['volatility_20d'] > (mean_vol * 2.5)) if mean_vol > 0 else False
+
+        clustering_results.append((
+            batch_id,
+            row['ts'],
+            algo_name,
+            row['currency_pair'],
+            canonical,
+            name,
+            is_outlier,
+            float(sil_score),
+        ))
+
+avg_sil = (km_sil + db_sil + ahc_sil) / 3
+print(f"Clustering selesai — Silhouette: K-Means={km_sil:.3f}, DBSCAN={db_sil:.3f}, AHC={ahc_sil:.3f}, Rata-rata={avg_sil:.3f}")
 
 # 8. Simpan Hasil Klastering ke Cassandra
-print("Menyimpan hasil klastering ke tabel clustering_results...")
+print(f"Menyimpan {len(clustering_results)} hasil klastering ke tabel clustering_results (batch {batch_id})...")
 insert_cluster_query = """
 INSERT INTO clustering_results (
     batch_id, ts, algorithm, currency_pair, cluster_label, cluster_name, is_outlier, silhouette_score
