@@ -17,6 +17,17 @@ services:
       timeout: 10s
       retries: 10
 
+  cassandra-init:
+    image: cassandra:5.0
+    container_name: cassandra-init-laptop3
+    depends_on:
+      cassandra:
+        condition: service_healthy
+    volumes:
+      - ./serving/init-cassandra.cql:/init.cql:ro
+    command: ["cqlsh", "-f", "/init.cql"]
+    restart: "no"
+
   elasticsearch:
     image: docker.elastic.co/elasticsearch/elasticsearch:8.14.0
     container_name: elasticsearch-laptop3
@@ -34,16 +45,33 @@ services:
       timeout: 10s
       retries: 10
 
+  elasticsearch-init:
+    image: curlimages/curl:latest
+    container_name: es-init-laptop3
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    volumes:
+      - ./serving/init-elasticsearch.sh:/init-es.sh:ro
+    command: ["sh", "/init-es.sh"]
+    restart: "no"
+
   fastapi:
     build: ./serving/fastapi
     container_name: fastapi-laptop3
     ports:
       - "8000:8000"
     depends_on:
-      cassandra:
-        condition: service_healthy
-      elasticsearch:
-        condition: service_healthy
+      cassandra-init:
+        condition: service_completed_successfully
+      elasticsearch-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
     environment:
       - CASSANDRA_HOST=cassandra
       - ELASTICSEARCH_HOST=http://elasticsearch:9200
@@ -64,9 +92,19 @@ services:
     ports:
       - "8501:8501"
     depends_on:
-      - fastapi
+      fastapi:
+        condition: service_healthy
     environment:
       - API_BASE=http://fastapi:8000
+
+  react:
+    build: ./serving/react-dashboard
+    container_name: react-laptop3
+    ports:
+      - "3000:3000"
+    depends_on:
+      fastapi:
+        condition: service_healthy
 
 volumes:
   cassandra-data:
