@@ -30,6 +30,7 @@ from cassandra_client import (
     insert_feature,
     get_all_features,
     get_latest_clustering_summary,
+    insert_clustering_metrics,
 )
 from elasticsearch_client import (
     init as es_init,
@@ -268,6 +269,23 @@ async def run_clustering_logic():
                     }
 
         avg_silhouette = float(np.mean([km_sil, db_sil, ahc_sil]))
+
+        db_noise_count = int((db_labels_raw == -1).sum())
+        db_noise_ratio = float(db_noise_count / n) if n > 0 else 0.0
+        dbscan_k = len(set(db_labels_raw) - {-1})
+
+        metrics_data = {
+            "batch_id": batch_id,
+            "ts": datetime.now(timezone.utc),
+            "kmeans_k": int(kmeans.n_clusters),
+            "kmeans_silhouette": float(km_sil),
+            "dbscan_noise_ratio": db_noise_ratio,
+            "dbscan_silhouette": float(db_sil),
+            "ahc_silhouette": float(ahc_sil),
+            "dendrogram_linkage": "ward",
+            "labels_order": f"[{centroid_order[0]}→Pro-Dollar,{centroid_order[1]}→Transisi,{centroid_order[2]}→Yuan]" if k >= 3 else f"[{centroid_order[0]}→Pro-Dollar,{centroid_order[1]}→Transisi]",
+        }
+        insert_clustering_metrics(metrics_data)
 
         notif_data = {
             "id": str(uuid.uuid4()),

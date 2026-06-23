@@ -35,6 +35,9 @@ _batch_select = None
 
 _pairs_select = None
 
+_metrics_insert = None
+_metrics_select = None
+
 _notification_insert = None
 _notification_select = None
 
@@ -45,6 +48,7 @@ def init():
     global _features_select, _feature_insert, _all_features_select
     global _clustering_insert, _clustering_select, _batch_select
     global _pairs_select
+    global _metrics_insert, _metrics_select
     global _notification_insert, _notification_select
 
     _cluster = Cluster([CASSANDRA_HOST])
@@ -97,6 +101,15 @@ def init():
     )
     _notification_select = _session.prepare(
         "SELECT * FROM notifications WHERE bucket = ? ORDER BY ts DESC LIMIT ?"
+    )
+
+    _metrics_insert = _session.prepare(
+        "INSERT INTO clustering_metrics (batch_id, ts, kmeans_k, kmeans_silhouette, "
+        "dbscan_noise_ratio, dbscan_silhouette, ahc_silhouette, dendrogram_linkage, labels_order) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
+    )
+    _metrics_select = _session.prepare(
+        "SELECT * FROM clustering_metrics WHERE batch_id = ?"
     )
 
 
@@ -257,7 +270,7 @@ def get_latest_clustering_summary():
     try:
         rows = _session.execute(
             "SELECT batch_id, ts, algorithm, currency_pair, cluster_label, cluster_name, is_outlier, silhouette_score "
-            "FROM clustering_results PER PARTITION LIMIT 1"
+            "FROM clustering_results"
         )
         results = [dict(r) for r in rows]
         if not results:
@@ -299,3 +312,29 @@ def get_latest_clustering_summary():
     except Exception as e:
         logger.error("Error fetching latest clustering summary: %s", e)
         return {"status": "error", "message": str(e), "results": []}
+
+
+def insert_clustering_metrics(data: dict):
+    try:
+        _session.execute(
+            _metrics_insert,
+            (
+                data["batch_id"], data["ts"],
+                data.get("kmeans_k"), data.get("kmeans_silhouette"),
+                data.get("dbscan_noise_ratio"), data.get("dbscan_silhouette"),
+                data.get("ahc_silhouette"), data.get("dendrogram_linkage"),
+                data.get("labels_order"),
+            ),
+        )
+    except Exception as e:
+        logger.error("Error inserting clustering metrics: %s", e)
+        raise
+
+
+def get_clustering_metrics(batch_id: str):
+    try:
+        rows = _session.execute(_metrics_select, (batch_id,))
+        return [dict(r) for r in rows]
+    except Exception as e:
+        logger.error("Error fetching clustering metrics: %s", e)
+        return []
