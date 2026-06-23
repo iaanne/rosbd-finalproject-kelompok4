@@ -1,7 +1,5 @@
 services:
-  # ==========================================
-  # LAPTOP 2: Processing Layer (Nadhifa)
-  # ==========================================
+  
   spark-master:
     image: bitnamilegacy/spark:3.5.1
     container_name: spark-master-laptop2
@@ -30,13 +28,13 @@ services:
       - SPARK_LOCAL_STORAGE_ENCRYPTION_ENABLED=no
       - SPARK_SSL_ENABLED=no
     ports:
-      - "8081:8081" # Spark Worker Web UI
+      - "8081:8081" 
     depends_on:
       - spark-master
     volumes:
       - ./processing:/app
 
-  # Jupyter PySpark untuk development kode Anda
+
   jupyter-spark:
     image: jupyter/pyspark-notebook:spark-3.5.0
     container_name: jupyter-laptop2
