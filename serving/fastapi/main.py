@@ -12,7 +12,7 @@ from sklearn.metrics import silhouette_score
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from typing import Optional
+from typing import Optional, Set
 
 from cassandra_client import (
     init as cassandra_init,
@@ -33,6 +33,7 @@ from cassandra_client import (
     insert_clustering_metrics,
     get_clustering_metrics,
     get_latest_clustering_metrics,
+    insert_batch_index,
 )
 from elasticsearch_client import (
     init as es_init,
@@ -40,8 +41,9 @@ from elasticsearch_client import (
     search_logs,
     index_log,
 )
-from notifications import manager
+from clustering import _map_cluster_names
 import email_client
+from telegram_client import init as tg_init, send_alert as tg_send
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -67,21 +69,19 @@ def run_compute_features_logic():
             'open': 'first', 'high': 'max', 'low': 'min',
             'close': 'last', 'volume': 'sum', 'ts': 'last'
         }).reset_index().sort_values(['currency_pair', 'ts'])
-        daily.drop(columns=['date'], inplace=True)
 
-        # Extract DXY dan CNY daily close untuk korelasi
-        dxy = daily[daily['currency_pair'] == 'DXY'][['ts', 'close']].rename(columns={'close': 'close_dxy'})
-        cny = daily[daily['currency_pair'].isin(['CNY/USD', 'CNY'])][['ts', 'close']].rename(columns={'close': 'close_cny'})
+        # Extract DXY dan CNY daily close untuk korelasi (merge via date, bukan ts, karena ts berbeda per pair)
+        dxy = daily[daily['currency_pair'] == 'DXY'][['date', 'close']].rename(columns={'close': 'close_dxy'})
+        cny = daily[daily['currency_pair'].isin(['CNY/USD', 'CNY'])][['date', 'close']].rename(columns={'close': 'close_cny'})
 
         if dxy.empty:
-            dxy = pd.DataFrame({'ts': daily['ts'].unique(), 'close_dxy': 100.0})
+            dxy = pd.DataFrame({'date': daily['date'].unique(), 'close_dxy': 100.0})
         if cny.empty:
-            cny = pd.DataFrame({'ts': daily['ts'].unique(), 'close_cny': 7.0})
+            cny = pd.DataFrame({'date': daily['date'].unique(), 'close_cny': 7.0})
 
-        daily = pd.merge(daily, dxy, on='ts', how='left')
-        daily = pd.merge(daily, cny, on='ts', how='left')
-        daily['close_dxy'] = daily.groupby('currency_pair')['close_dxy'].ffill().bfill()
-        daily['close_cny'] = daily.groupby('currency_pair')['close_cny'].ffill().bfill()
+        daily = pd.merge(daily, dxy, on='date', how='left')
+        daily = pd.merge(daily, cny, on='date', how='left')
+        daily.drop(columns=['date'], inplace=True)
 
         def compute_rsi(series, period=14):
             delta = series.diff()
@@ -115,8 +115,8 @@ def run_compute_features_logic():
             group['bb_lower'] = group['rolling_mean_20d'] - (2 * std_20d)
 
             group = group.dropna(subset=['volatility_20d'])
-            group['corr_dxy_20d'] = group['corr_dxy_20d'].clip(-1, 1)
-            group['corr_cny_20d'] = group['corr_cny_20d'].clip(-1, 1)
+            group['corr_dxy_20d'] = group['corr_dxy_20d'].ffill().clip(-1, 1)
+            group['corr_cny_20d'] = group['corr_cny_20d'].ffill().clip(-1, 1)
             features_list.append(group)
 
         if not features_list:
@@ -161,7 +161,8 @@ async def run_clustering_logic():
             return None
 
         df_features = pd.DataFrame(features)
-        batch_id = str(uuid.uuid4())[:8]
+        now = datetime.now(timezone.utc)
+        batch_id = now.strftime('%Y%m%d%H%M%S') + '-' + str(uuid.uuid4()).split('-')[0]
         mean_vol = df_features['volatility_20d'].mean() if not df_features.empty else 0.0
 
         # Build feature matrix: latest snapshot per currency_pair
@@ -178,8 +179,8 @@ async def run_clustering_logic():
 
         # ── 1. K-Means (k=3) ──────────────────────────────────────
         kmeans = KMeans(n_clusters=min(3, n), random_state=42, n_init=10)
-        km_labels = kmeans.fit_predict(X)
-        km_sil = silhouette_score(X, km_labels) if n >= 4 and len(set(km_labels)) > 1 else 0.0
+        km_labels_raw = kmeans.fit_predict(X)
+        km_sil = silhouette_score(X, km_labels_raw) if n >= 4 and len(set(km_labels_raw)) > 1 else 0.0
 
         # ── 2. DBSCAN (eps=0.3, min_samples=2) ────────────────────
         dbscan = DBSCAN(eps=0.3, min_samples=2)
@@ -191,42 +192,15 @@ async def run_clustering_logic():
         ahc_labels_raw = ahc.fit_predict(X)
         ahc_sil = silhouette_score(X, ahc_labels_raw) if n >= 4 and len(set(ahc_labels_raw)) > 1 else 0.0
 
-        # ── Helper: relabel arbitrary cluster IDs to canonical 0/1/2 ──
-        def relabel_by_centroid(labels_raw):
-            """Map each cluster: 0 (highest corr_dxy → Pro-Dollar), 2 (lowest corr_dxy → Yuan), 1 (remaining → Transisi)."""
-            unique = sorted(set(labels_raw) - {-1})
-            if len(unique) < 2:
-                return [1] * len(labels_raw)
-            centroids_ = np.array([
-                [X[labels_raw == c, 0].mean(), X[labels_raw == c, 1].mean()]
-                for c in unique
-            ])
-            order = sorted(range(len(unique)), key=lambda i: (centroids_[i, 0], centroids_[i, 1]))
-            c0 = unique[order[-1]]   # highest corr_dxy → Pro-Dollar
-            c2 = unique[order[0]]    # lowest corr_dxy  → Yuan
-            c1 = unique[order[1]] if len(order) >= 3 else unique[0]
-            mapping = {c0: 0, c1: 1, c2: 2}
-            return [mapping.get(l, 1) if l != -1 else 1 for l in labels_raw]
+        # ── Relabel all algorithms using idxmax centroid naming ──
+        km_label_map = _map_cluster_names(df_latest, km_labels_raw)
+        db_label_map = _map_cluster_names(df_latest, db_labels_raw)
+        ahc_label_map = _map_cluster_names(df_latest, ahc_labels_raw)
+        km_labels = [km_label_map.get(l, 1) if l != -1 else 1 for l in km_labels_raw]
+        db_labels = [db_label_map.get(l, 1) if l != -1 else 1 for l in db_labels_raw]
+        ahc_labels = [ahc_label_map.get(l, 1) if l != -1 else 1 for l in ahc_labels_raw]
 
-        # ── Relabel K-Means: centroid with highest corr_dxy → Pro-Dollar(0) ──
-        centroids = kmeans.cluster_centers_
-        k = len(centroids)
-        centroid_order = sorted(range(k), key=lambda i: (centroids[i, 0], centroids[i, 1]))
-        km_label_map = {}
-        if k >= 1:
-            km_label_map[centroid_order[-1]] = 0      # highest corr_dxy → Pro-Dollar
-        if k >= 2:
-            km_label_map[centroid_order[0]] = 2       # lowest corr_dxy → Yuan
-        if k >= 3:
-            km_label_map[centroid_order[1]] = 1       # middle corr_dxy → Transisi
-        elif k == 2:
-            km_label_map[centroid_order[0]] = 1       # only 2 clusters → both in Transisi (no pure Yuan)
-        km_labels = [km_label_map.get(l, 1) for l in km_labels]
-
-        db_labels = relabel_by_centroid(db_labels_raw)
-        ahc_labels = relabel_by_centroid(ahc_labels_raw)
-
-        name_map = {0: "Pro-Dollar", 1: "Transisi", 2: "Yuan"}
+        name_map = {0: "Pro-Dollar", 1: "Transisi", 2: "Mendekati Yuan"}
 
         inserted_count = 0
         latest_results = {}
@@ -283,13 +257,15 @@ async def run_clustering_logic():
             "dbscan_silhouette": float(db_sil),
             "ahc_silhouette": float(ahc_sil),
             "dendrogram_linkage": "ward",
-            "labels_order": f"[{centroid_order[0]}→Pro-Dollar,{centroid_order[1]}→Transisi,{centroid_order[2]}→Yuan]" if k >= 3 else f"[{centroid_order[0]}→Pro-Dollar,{centroid_order[1]}→Transisi]",
+            "labels_order": "idxmax-mapping(Pro-Dollar,Transisi,Yuan)",
         }
         insert_clustering_metrics(metrics_data)
 
+        insert_batch_index(batch_id, now)
+
         notif_data = {
             "id": str(uuid.uuid4()),
-            "ts": datetime.now(timezone.utc),
+            "ts": now,
             "type": "clustering_done",
             "title": "Clustering Selesai (K-Means + DBSCAN + AHC)",
             "message": f"Batch {batch_id} — {inserted_count} records, avg silhouette: {avg_silhouette:.3f}",
@@ -322,7 +298,7 @@ async def run_clustering_logic():
                 "message": f"{o['currency_pair']} terklasifikasi sebagai outlier — volatility di luar normal.",
                 "ts": datetime.now(timezone.utc).isoformat(),
             }
-            await manager.broadcast_alert(alert_msg)
+            await emit_alert(alert_msg)
             insert_notification({
                 "id": str(uuid.uuid4()),
                 "ts": datetime.now(timezone.utc),
@@ -336,7 +312,7 @@ async def run_clustering_logic():
             })
 
         broadcast_data["outliers"] = [r["currency_pair"] for r in outliers]
-        await manager.broadcast_system({**broadcast_data, "message": notif_data["message"]})
+        await ws_broadcast({"type": "system", **broadcast_data, "message": notif_data["message"]})
 
         idr_latest = latest_results.get("IDR") or latest_results.get("IDR/USD")
         if idr_latest and idr_latest["is_outlier"]:
@@ -373,12 +349,43 @@ async def periodic_clustering():
             await asyncio.sleep(60)
 
 
+# ─── WebSocket Manager ──────────────────────────────────────
+
+active_connections: Set[WebSocket] = set()
+
+
+async def ws_broadcast(message: dict):
+    dead = set()
+    for ws in active_connections:
+        try:
+            await ws.send_json(message)
+        except Exception:
+            dead.add(ws)
+    if dead:
+        active_connections.difference_update(dead)
+        logger.warning("Removed %d stale WebSocket connections", len(dead))
+
+
+async def emit_alert(data: dict):
+    payload = {
+        "type": "alert",
+        "severity": data.get("severity", "info"),
+        "category": data.get("category", "general"),
+        "title": data.get("title", ""),
+        "message": data.get("message", ""),
+        "ts": data.get("ts", datetime.now(timezone.utc).isoformat()),
+    }
+    await ws_broadcast(payload)
+    asyncio.create_task(tg_send(payload["title"], payload["message"], payload["severity"]))
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("Starting up — connecting to Cassandra & Elasticsearch")
     cassandra_init()
     es_init()
     email_client.init()
+    tg_init()
     
     # Start periodic clustering background task
     asyncio.create_task(periodic_clustering())
@@ -475,14 +482,18 @@ class ClusteringDoneData(BaseModel):
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
-    await manager.connect(websocket)
+    await websocket.accept()
+    active_connections.add(websocket)
+    logger.info("WebSocket client connected (%d total)", len(active_connections))
     try:
         while True:
             await websocket.receive_text()
     except WebSocketDisconnect:
-        manager.disconnect(websocket)
+        active_connections.discard(websocket)
+        logger.info("WebSocket client disconnected (%d remaining)", len(active_connections))
     except Exception:
-        manager.disconnect(websocket)
+        active_connections.discard(websocket)
+        logger.info("WebSocket client disconnected (%d remaining)", len(active_connections))
 
 
 # ─── Data Update (from Spark) ───────────────────────────────
@@ -494,7 +505,7 @@ async def handle_data_update(payload: DataUpdateIn, background_tasks: Background
         if payload.type == "forex_update":
             data = ForexUpdateData(**payload.data)
             insert_forex_rate(data.model_dump())
-            await manager.broadcast_price_update(data.model_dump())
+            await ws_broadcast({"type": "price_update", **data.model_dump()})
             
             # Trigger feature calculation in background
             background_tasks.add_task(run_compute_features_logic)
@@ -545,7 +556,8 @@ async def handle_data_update(payload: DataUpdateIn, background_tasks: Background
                 "algorithm": data.algorithm,
             }
             insert_notification(notif_data)
-            await manager.broadcast_system({
+            await ws_broadcast({
+                "type": "system",
                 "batch_id": data.batch_id,
                 "algorithm": data.algorithm,
                 "silhouette_score": data.silhouette_score,
@@ -641,6 +653,45 @@ def read_clustering_metrics(batch_id: str):
 @app.get("/api/batches")
 def read_batches(limit: int = 20):
     return list_batch_ids(limit)
+
+
+# ─── IKR Ranking & Corr-Delta ───────────────────────────────
+
+
+@app.get("/api/ikr-ranking")
+def read_ikr_ranking():
+    """Return ASEAN currencies ranked oleh vulnerability (Mendekati Yuan first)."""
+    batches = list_batch_ids(5)
+    if not batches:
+        return []
+    latest_batch = batches[0]
+    raw = get_clustering_results(latest_batch)
+    seen = {}
+    for r in raw:
+        p = r["currency_pair"]
+        if p not in seen or r["ts"] > seen[p]["ts"]:
+            seen[p] = r
+    results = list(seen.values())
+    asean = [r for r in results if r["currency_pair"] not in ("DXY", "CNY", "GOLD", "Gold")]
+    asean.sort(key=lambda r: (
+        -(r.get("cluster_label", 1) == 2),
+        -(r.get("is_outlier", False)),
+        -(r.get("cluster_label", 1) == 1),
+        r["currency_pair"],
+    ))
+    return [{"rank": i + 1, **r} for i, r in enumerate(asean)]
+
+
+@app.get("/api/corr-delta/{pair}")
+def read_corr_delta(pair: str):
+    """Return delta corr_dxy_20d antara dua titik data terakhir."""
+    features = get_features(pair, limit=2)
+    if len(features) < 2:
+        return {"pair": pair, "delta": None, "latest": features[0]["corr_dxy_20d"] if features else None}
+    latest = features[0]["corr_dxy_20d"]
+    prev = features[1]["corr_dxy_20d"]
+    delta = (latest - prev) if (latest is not None and prev is not None) else None
+    return {"pair": pair, "delta": delta, "latest": latest, "previous": prev}
 
 
 # ─── Elasticsearch Logs ─────────────────────────────────────

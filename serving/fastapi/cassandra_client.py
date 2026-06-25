@@ -38,6 +38,9 @@ _pairs_select = None
 _metrics_insert = None
 _metrics_select = None
 
+_batch_index_insert = None
+_batch_index_select = None
+
 _notification_insert = None
 _notification_select = None
 
@@ -49,6 +52,7 @@ def init():
     global _clustering_insert, _clustering_select, _batch_select
     global _pairs_select
     global _metrics_insert, _metrics_select
+    global _batch_index_insert, _batch_index_select
     global _notification_insert, _notification_select
 
     _cluster = Cluster([CASSANDRA_HOST])
@@ -101,6 +105,13 @@ def init():
     )
     _notification_select = _session.prepare(
         "SELECT * FROM notifications WHERE bucket = ? ORDER BY ts DESC LIMIT ?"
+    )
+
+    _batch_index_insert = _session.prepare(
+        "INSERT INTO batch_index (bucket, ts, batch_id) VALUES (?, ?, ?)"
+    )
+    _batch_index_select = _session.prepare(
+        "SELECT batch_id, ts FROM batch_index WHERE bucket = ? ORDER BY ts DESC LIMIT ?"
     )
 
     _metrics_insert = _session.prepare(
@@ -179,24 +190,23 @@ def insert_clustering_result(data: dict):
         raise
 
 
+def insert_batch_index(batch_id: str, ts: datetime):
+    try:
+        _session.execute(_batch_index_insert, ("all", ts, batch_id))
+    except Exception as e:
+        logger.error("Error inserting batch index: %s", e)
+
+
 def list_batch_ids(limit: int = 20):
     try:
-        # Ambil dari tabel notifications yang terurut secara kronologis (ts DESC)
-        rows = _session.execute("SELECT batch_id FROM notifications WHERE bucket = 'all' LIMIT 100")
-        batches = []
-        seen = set()
-        for r in rows:
-            b_id = r.get("batch_id")
-            if b_id and b_id not in seen:
-                seen.add(b_id)
-                batches.append(b_id)
-                if len(batches) >= limit:
-                    break
-        # Jika tabel notifications kosong, gunakan fallback query DISTINCT (token order)
-        if not batches:
-            rows = _session.execute(_batch_select, (limit,))
-            batches = [r["batch_id"] for r in rows]
-        return batches
+        rows = list(_session.execute(_batch_index_select, ("all", limit)))
+        if rows:
+            return [r["batch_id"] for r in rows]
+    except Exception as e:
+        logger.warning("batch_index query failed (%s), falling back to DISTINCT", e)
+    try:
+        rows = _session.execute(_batch_select, (limit,))
+        return [r["batch_id"] for r in rows]
     except Exception as e:
         logger.error("Error listing batch ids: %s", e)
         return []
@@ -283,31 +293,32 @@ def get_all_features():
 
 def get_latest_clustering_summary():
     try:
-        rows = _session.execute(
-            "SELECT batch_id, ts, algorithm, currency_pair, cluster_label, cluster_name, is_outlier, silhouette_score "
-            "FROM clustering_results"
-        )
-        results = [dict(r) for r in rows]
-        if not results:
-            return {"status": "no_data", "message": "Belum ada hasil clustering.", "results": []}
+        idx_rows = list(_session.execute(_batch_index_select, ("all", 1)))
+        if not idx_rows:
+            return {"status": "no_data", "message": "Belum ada batch_index.", "results": []}
 
-        latest_ts = max(r["ts"] for r in results)
+        batch_id = idx_rows[0]["batch_id"]
+        batch_ts = idx_rows[0]["ts"]
+        if batch_ts.tzinfo is None:
+            batch_ts = batch_ts.replace(tzinfo=timezone.utc)
+
+        raw = get_clustering_results(batch_id)
+        if not raw:
+            return {"status": "no_data", "message": "Batch ditemukan tapi hasil clustering kosong.", "results": []}
+
         now = datetime.now(timezone.utc)
-        if latest_ts.tzinfo is None:
-            latest_ts = latest_ts.replace(tzinfo=timezone.utc)
         stale_threshold = 3600
-        is_stale = (now - latest_ts).total_seconds() > stale_threshold
+        is_stale = (now - batch_ts).total_seconds() > stale_threshold
 
         summary = {}
-        latest_by_pair = {}
-        for r in results:
+        for r in raw:
             pair = r["currency_pair"]
             ts = r["ts"]
             if ts.tzinfo is None:
                 ts = ts.replace(tzinfo=timezone.utc)
-            if pair not in latest_by_pair or ts > latest_by_pair[pair]:
-                latest_by_pair[pair] = ts
+            if pair not in summary or ts > summary[pair]["ts_orig"]:
                 summary[pair] = {
+                    "ts_orig": ts,
                     "ts": ts.isoformat(),
                     "currency_pair": pair,
                     "cluster_label": r["cluster_label"],
@@ -319,10 +330,10 @@ def get_latest_clustering_summary():
 
         return {
             "status": "stale" if is_stale else "ok",
-            "latest_ts": latest_ts.isoformat(),
+            "latest_ts": batch_ts.isoformat(),
             "is_stale": is_stale,
-            "message": "Data clustering basi — terakhir {}.".format(latest_ts.strftime('%d %b %H:%M UTC')) if is_stale else "Data clustering terkini.",
-            "results": list(summary.values()),
+            "message": "Data clustering basi — terakhir {}.".format(batch_ts.strftime('%d %b %H:%M UTC')) if is_stale else "Data clustering terkini.",
+            "results": [{k: v for k, v in item.items() if k != "ts_orig"} for item in summary.values()],
         }
     except Exception as e:
         logger.error("Error fetching latest clustering summary: %s", e)
@@ -357,21 +368,11 @@ def get_clustering_metrics(batch_id: str):
 
 def get_latest_clustering_metrics():
     try:
-        batch_rows = _session.execute(
-            "SELECT batch_id, ts FROM clustering_results LIMIT 100"
-        )
-        batches = {}
-        for r in batch_rows:
-            bid = r["batch_id"]
-            ts = r["ts"]
-            if ts.tzinfo is None:
-                ts = ts.replace(tzinfo=timezone.utc)
-            if bid not in batches or ts > batches[bid]:
-                batches[bid] = ts
-        if not batches:
+        idx_rows = list(_session.execute(_batch_index_select, ("all", 1)))
+        if not idx_rows:
             return []
-        latest_batch = max(batches, key=lambda b: batches[b])
-        rows = _session.execute(_metrics_select, (latest_batch,))
+        batch_id = idx_rows[0]["batch_id"]
+        rows = _session.execute(_metrics_select, (batch_id,))
         return [dict(r) for r in rows]
     except Exception as e:
         logger.error("Error fetching latest clustering metrics: %s", e)
