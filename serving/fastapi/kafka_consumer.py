@@ -10,7 +10,7 @@ import email_client
 
 logger = logging.getLogger(__name__)
 
-KAFKA_BOOTSTRAP_SERVERS = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "100.75.210.119:29092")
+KAFKA_BOOTSTRAP_SERVERS = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "100.75.210.119:9092")
 KAFKA_TOPIC = os.getenv("KAFKA_TOPIC", "forex-raw")
 KAFKA_GROUP_ID = os.getenv("KAFKA_GROUP_ID", "fastapi-websocket-group")
 
