@@ -218,15 +218,16 @@ function Dendrogram({ features, cluster }) {
   }
 
   return (
-    <svg viewBox={`0 0 ${W} ${H + 10}`} width="100%" style={{ maxHeight: H + 10 }}>
+    <svg viewBox={`0 0 ${W} ${H + 30}`} width="100%" style={{ maxHeight: H + 30 }}>
       {lines.map((l, i) => <line key={i} {...l} strokeLinecap="round" />)}
       {pts.map((p, i) => {
         const lfIdx = leafMap[i]
         const x = LABEL_W + lfIdx * ((W - LABEL_W - PAD) / (N - 1))
+        const textY = H - PAD + 18
         return (
           <g key={p.pair}>
             <circle cx={x.toFixed(1)} cy={H - PAD + 6} r="3" fill={clusterCol[p.label] || '#fff'} opacity="0.8" />
-            <text x={x.toFixed(1)} y={H + 6} fontSize="9" fill="#fff" textAnchor="end" fontWeight={p.label === 0 ? '700' : '500'} transform={`rotate(-35 ${x.toFixed(1)} ${H + 6})`}>{p.pair}</text>
+            <text x={x.toFixed(1)} y={textY} fontSize="9" fill="#fff" textAnchor="end" fontWeight={p.label === 0 ? '700' : '500'} transform={`rotate(-35 ${x.toFixed(1)} ${textY})`}>{p.pair}</text>
           </g>
         )
       })}
