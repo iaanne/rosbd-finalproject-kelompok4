@@ -151,7 +151,7 @@ function Dendrogram({ features, cluster }) {
     const featArr = (features || {})[c.currency_pair] || []
     const fd = featArr.length ? featArr[0] : {}
     return { pair: c.currency_pair, x: fd.corr_dxy_20d ?? 0.5, y: fd.corr_cny_20d ?? 0.3, label: c.cluster_label }
-  }).filter(p => p.x != null && p.y != null)
+  }).filter(p => p.x != null && p.y != null && p.pair !== 'DXY' && p.pair !== 'CNY')
   if (pts.length < 2) return <div className="text-sm text-text-soft py-2">Data belum cukup untuk dendrogram</div>
 
   const dist = (a, b) => Math.sqrt((a.x - b.x) ** 2 + (a.y - b.y) ** 2)
