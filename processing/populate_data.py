@@ -1,13 +1,15 @@
 import pandas as pd
 import numpy as np
 from cassandra.cluster import Cluster
+from cassandra.concurrent import execute_concurrent_with_args
 from datetime import datetime, timezone
 import uuid
 from sklearn.cluster import KMeans, DBSCAN, AgglomerativeClustering
 from sklearn.metrics import silhouette_score
 
 # 1. Inisialisasi Koneksi Cassandra
-CASSANDRA_IP = "localhost"
+import os
+CASSANDRA_IP = os.getenv("CASSANDRA_HOST", "100.66.223.98")
 print(f"Menghubungkan ke Cassandra di {CASSANDRA_IP}...")
 cluster = Cluster([CASSANDRA_IP])
 session = cluster.connect('dedolarisasi')
@@ -95,34 +97,36 @@ insert_feature_query = """
 INSERT INTO features (
     currency_pair, ts, returns_1d, log_return, rolling_mean_5d, rolling_mean_20d, 
     rolling_std_5d, volatility_20d, corr_dxy_20d, corr_cny_20d, rsi_14, bb_upper, bb_lower
-) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 """
+insert_stmt = session.prepare(insert_feature_query)
 
+params = []
 for idx, row in df_features.iterrows():
     ts_val = row['ts']
     if isinstance(ts_val, pd.Timestamp):
         ts_val = ts_val.to_pydatetime()
     if hasattr(ts_val, 'tzinfo') and ts_val.tzinfo is None:
         ts_val = ts_val.replace(tzinfo=timezone.utc)
-    try:
-        session.execute(insert_feature_query, (
-            row['currency_pair'],
-            ts_val,
-            float(row['returns_1d']) if not pd.isna(row['returns_1d']) else None,
-            float(row['log_return']) if not pd.isna(row['log_return']) else None,
-            float(row['rolling_mean_5d']) if not pd.isna(row['rolling_mean_5d']) else None,
-            float(row['rolling_mean_20d']) if not pd.isna(row['rolling_mean_20d']) else None,
-            float(row['rolling_std_5d']) if not pd.isna(row['rolling_std_5d']) else None,
-            float(row['volatility_20d']) if not pd.isna(row['volatility_20d']) else None,
-            float(row['corr_dxy_20d']) if not pd.isna(row['corr_dxy_20d']) else None,
-            float(row['corr_cny_20d']) if not pd.isna(row['corr_cny_20d']) else None,
-            float(row['rsi_14']) if not pd.isna(row['rsi_14']) else None,
-            float(row['bb_upper']) if not pd.isna(row['bb_upper']) else None,
-            float(row['bb_lower']) if not pd.isna(row['bb_lower']) else None
-        ))
-    except Exception as e:
-        print(f"ERROR row {idx}: {row['currency_pair']} ts={repr(ts_val)} type={type(ts_val)} -> {e}")
-        raise
+    params.append((
+        row['currency_pair'],
+        ts_val,
+        float(row['returns_1d']) if not pd.isna(row['returns_1d']) else None,
+        float(row['log_return']) if not pd.isna(row['log_return']) else None,
+        float(row['rolling_mean_5d']) if not pd.isna(row['rolling_mean_5d']) else None,
+        float(row['rolling_mean_20d']) if not pd.isna(row['rolling_mean_20d']) else None,
+        float(row['rolling_std_5d']) if not pd.isna(row['rolling_std_5d']) else None,
+        float(row['volatility_20d']) if not pd.isna(row['volatility_20d']) else None,
+        float(row['corr_dxy_20d']) if not pd.isna(row['corr_dxy_20d']) else None,
+        float(row['corr_cny_20d']) if not pd.isna(row['corr_cny_20d']) else None,
+        float(row['rsi_14']) if not pd.isna(row['rsi_14']) else None,
+        float(row['bb_upper']) if not pd.isna(row['bb_upper']) else None,
+        float(row['bb_lower']) if not pd.isna(row['bb_lower']) else None
+    ))
+
+print(f"Mengirimkan {len(params)} baris data fitur secara paralel...")
+results = execute_concurrent_with_args(session, insert_stmt, params)
+print(f"Berhasil menyimpan {len(results)} baris data fitur.")
 
 # 7. Jalankan Klastering dengan K-Means + DBSCAN + AHC
 print("Menjalankan K-Means + DBSCAN + AHC clustering...")

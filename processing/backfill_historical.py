@@ -2,6 +2,7 @@ import yfinance as yf
 import pandas as pd
 import numpy as np
 from cassandra.cluster import Cluster
+from cassandra.concurrent import execute_concurrent_with_args
 from datetime import datetime, timezone
 import logging
 import time
@@ -9,7 +10,8 @@ import time
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
 
-CASSANDRA_HOST = "localhost"
+import os
+CASSANDRA_HOST = os.getenv("CASSANDRA_HOST", "100.66.223.98")
 KEYSPACE = "dedolarisasi"
 
 TICKERS = {
@@ -44,7 +46,7 @@ for yf_ticker, pair_name in TICKERS.items():
             logger.warning("No data for %s, skipping.", yf_ticker)
             continue
         hist = hist.reset_index()
-        count = 0
+        params = []
         for _, row in hist.iterrows():
             ts = row["Date"]
             if isinstance(ts, pd.Timestamp):
@@ -58,8 +60,10 @@ for yf_ticker, pair_name in TICKERS.items():
             low_p = float(row["Low"]) if not pd.isna(row["Low"]) else 0.0
             close_p = float(row["Close"]) if not pd.isna(row["Close"]) else 0.0
             volume = int(row["Volume"]) if not pd.isna(row["Volume"]) else 0
-            session.execute(insert_stmt, (pair_name, ts, open_p, high_p, low_p, close_p, volume))
-            count += 1
+            params.append((pair_name, ts, open_p, high_p, low_p, close_p, volume))
+        
+        results = execute_concurrent_with_args(session, insert_stmt, params)
+        count = len(results)
         total_inserted += count
         logger.info("Inserted %d rows for %s", count, pair_name)
     except Exception as e:
