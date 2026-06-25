@@ -27,9 +27,9 @@ function fmtPrice(v) {
 
 function buildIKR(features, clusterInfo) {
   if (!features || !features.length) return [50, 'Sedang', 'orange']
-  const last = features[0]
-  const cDxy = last.corr_dxy_20d ?? 0.5
-  const vol = last.volatility_20d ?? 0.2
+  const findLatest = (field, fallback) => { for (const d of features) if (d[field] != null) return d[field]; return fallback }
+  const cDxy = findLatest('corr_dxy_20d', 0.5)
+  const vol = findLatest('volatility_20d', 0.2)
   let penalty = 0
   if (clusterInfo) {
     const idr = clusterInfo.find(c => c.currency_pair === 'IDR')
@@ -459,7 +459,12 @@ export default function App() {
     const idrRank = idrRankItem ? idrRankItem.rank : 1
     const total = ranking.length || 6
     const idrCl = cluster.find(c => c.currency_pair === 'IDR')
-    const idrFeatCorr = fxFeat('IDR').corr_dxy_20d
+    const lastVal = (p, field) => {
+      const arr = features[p] || []
+      for (const d of arr) if (d[field] != null) return d[field]
+      return null
+    }
+    const idrFeatCorr = lastVal('IDR', 'corr_dxy_20d')
     const corrDeltaVal = corrDelta?.delta
     const corrLatest = corrDelta?.latest ?? idrFeatCorr
     const corrV = corrDeltaVal != null ? fmt(corrDeltaVal) : (corrLatest != null ? fmt(corrLatest) : '—')
