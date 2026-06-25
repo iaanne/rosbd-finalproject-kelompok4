@@ -313,15 +313,10 @@ function TrendChart({ features }) {
 }
 
 function TC({ sym, price, pct, green }) {
-  const cls = pct == null ? 'flat' : pct >= 0 ? 'up' : 'down'
-  const clsMap = { up: 'text-green-brand', down: 'text-red-brand', flat: 'text-text-faint' }
-  const arr = pct == null ? '–' : pct >= 0 ? '▴' : '▾'
-  const ch = pct != null ? `${arr} ${Math.abs(pct).toFixed(2).replace('.', ',')}%` : '—'
   return (
     <div className="flex-none min-w-[108px] px-4 py-2.5 border-r border-border-soft text-center last:border-r-0" style={green ? { background: 'rgba(114,188,143,.08)' } : {}}>
       <div className="text-[11px] font-bold text-text-soft tracking-wide">{sym}</div>
       <div className="text-sm font-semibold tabular-nums mt-0.5">{fmtPrice(price)}</div>
-      <div className={`text-[11px] font-semibold mt-px ${clsMap[cls]}`}>{ch}</div>
     </div>
   )
 }
@@ -562,13 +557,7 @@ export default function App() {
             className={`block w-full text-left px-3.5 py-2.5 mb-1 border border-transparent rounded-lg bg-transparent text-text-soft text-sm font-semibold cursor-pointer transition-all duration-200 hover:text-white hover:bg-surface-hover ${lens === 'bi' ? '!bg-bg-dark !text-blue-brand shadow-[0_0_12px_rgba(4,189,132,0.3)]' : ''}`}
             onClick={() => setLens('bi')}
           >🏛️ Bank Indonesia</button>
-          <hr className="border-none border-t border-border-soft my-4" />
-          <p className="text-xs text-text-soft my-1">🔄 Auto-refresh tiap 60 detik</p>
-          <p className="text-xs text-text-soft my-1">⏱ {time.toLocaleTimeString('id-ID')}</p>
-          <button
-            className="block w-full py-2 mt-3 border border-border-soft rounded-lg bg-surface-hover text-text-soft text-sm font-semibold cursor-pointer transition-all duration-200 hover:border-blue-brand hover:text-white hover:shadow-[0_0_10px_rgba(4,189,132,0.2)]"
-            onClick={load}
-          >↻ Refresh Data</button>
+
         </div>
       </aside>
 
