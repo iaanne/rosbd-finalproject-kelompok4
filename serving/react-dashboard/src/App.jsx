@@ -452,33 +452,34 @@ export default function App() {
   // API returns forex_rates ORDER BY ts DESC (newest first)
   const cny = forex.CNY || []
   const cnyCur = cny.length ? (cny[0].close || cny[0].open) : null
-  const cnyPrev = cny.length >= 2 ? (cny[1].close || cny[1].open) : cnyCur
 
   const cells = []
   for (const p of PAIRS) {
     const d = forex[p] || []
     const cur = d.length ? (d[0].close || d[0].open) : null
-    const prev = d.length >= 2 ? (d[1].close || d[1].open) : cur
-    const pct = (cur && prev) ? ((cur - prev) / prev * 100) : null
+    const feat = fxFeat(p)
+    const pct = (feat && feat.returns_1d != null) ? feat.returns_1d * 100 : null
     cells.push(<TC key={`usd-${p}`} sym={`${p}/USD`} price={cur} pct={pct} />)
   }
   for (const p of PAIRS) {
     const d = forex[p] || []
     const cur = d.length ? (d[0].close || d[0].open) : null
-    const prev = d.length >= 2 ? (d[1].close || d[1].open) : cur
     let cross = null, crossPct = null
     if (cur != null && cnyCur != null) {
       cross = cur / cnyCur
-      const crossPrev = (prev != null && cnyPrev != null) ? prev / cnyPrev : cross
-      crossPct = crossPrev ? ((cross - crossPrev) / crossPrev * 100) : null
+      const feat = fxFeat(p)
+      const cnyFeat = fxFeat('CNY')
+      if (feat && feat.returns_1d != null && cnyFeat && cnyFeat.returns_1d != null) {
+        crossPct = ((1 + feat.returns_1d) / (1 + cnyFeat.returns_1d) - 1) * 100
+      }
     }
     cells.push(<TC key={`cny-${p}`} sym={`${p}/CNY`} price={cross} pct={crossPct} green />)
   }
   for (const p of ['CNY', 'DXY']) {
     const d = forex[p] || []
     const cur = d.length ? (d[0].close || d[0].open) : null
-    const prev = d.length >= 2 ? (d[1].close || d[1].open) : cur
-    const pct = (cur && prev) ? ((cur - prev) / prev * 100) : null
+    const feat = fxFeat(p)
+    const pct = (feat && feat.returns_1d != null) ? feat.returns_1d * 100 : null
     cells.push(<TC key={p} sym={p === 'CNY' ? 'CNY/USD' : 'DXY'} price={cur} pct={pct} />)
   }
 
