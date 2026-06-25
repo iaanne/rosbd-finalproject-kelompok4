@@ -405,6 +405,7 @@ export default function App() {
   }, [])
 
   useEffect(() => {
+    mounted.current = true
     load()
     const iv = setInterval(load, 60000)
 
