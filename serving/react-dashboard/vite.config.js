@@ -7,9 +7,9 @@ export default defineConfig({
   server: {
     port: 3000,
     proxy: {
-      '/api': 'http://fastapi:8000',
+      '/api': 'http://100.66.223.98:8000',
       '/ws': {
-        target: 'ws://fastapi:8000',
+        target: 'ws://100.66.223.98:8000',
         ws: true,
       },
     },
