@@ -8,7 +8,9 @@ const CLUSTER_COLORS = { 0: '#e3566c', 1: '#f2b001', 2: '#04bd84' }
 
 async function api(path) {
   try {
-    const r = await fetch(`${API}${path}`, { signal: AbortSignal.timeout(5000) })
+    const sep = path.includes('?') ? '&' : '?'
+    const url = `${API}${path}${sep}_=${Date.now()}`
+    const r = await fetch(url, { signal: AbortSignal.timeout(5000) })
     return r.ok ? r.json() : []
   } catch { return [] }
 }
