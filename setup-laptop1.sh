@@ -28,7 +28,7 @@ docker exec kafka-laptop1 kafka-topics --list --bootstrap-server localhost:9092
 
 # 3. Install dependencies
 echo "[4/4] Installing Python dependencies..."
-pip install -q kafka-python yfinance pandas
+pip install -q kafka-python pandas websocket-client requests
 
 echo ""
 echo "========================================"

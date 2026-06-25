@@ -1,30 +1,29 @@
 import time
+import threading
 from config import FETCH_INTERVAL_SECONDS
-from fetcher import fetch_all
-from kafka_producer import get_producer, send_data
+from fetcher import start_tiingo_websocket, poll_exchangerate_api
+from kafka_producer import get_producer
 
 
 def main():
     print("=" * 50)
-    print("LAPTOP 1 - Data Ingestion")
-    print(f"Fetching every {FETCH_INTERVAL_SECONDS}s -> Kafka topic: forex-raw")
+    print("LAPTOP 1 - Data Ingestion (Tiingo WebSocket + ExchangeRate-API)")
+    print(f"REST Polling Interval: {FETCH_INTERVAL_SECONDS}s")
+    print("Kafka topic: forex-raw")
     print("=" * 50)
 
     producer = get_producer()
 
+    # 1. Start Tiingo WebSocket in a background thread
+    ws_thread = threading.Thread(
+        target=start_tiingo_websocket, args=(producer,), daemon=True
+    )
+    ws_thread.start()
+    print("[INIT] Tiingo WebSocket thread started.")
+
+    # 2. Run ExchangeRate-API Poller in the main thread
     try:
-        while True:
-            try:
-                print(f"\n[{time.strftime('%Y-%m-%d %H:%M:%S')}] Fetching forex data...")
-                records = fetch_all()
-                if records:
-                    send_data(producer, records)
-                    print(f"[OK] Sent {len(records)} records to Kafka")
-                else:
-                    print("[WARN] No data fetched")
-            except Exception as e:
-                print(f"[ERROR] {e}")
-            time.sleep(FETCH_INTERVAL_SECONDS)
+        poll_exchangerate_api(producer, FETCH_INTERVAL_SECONDS)
     except KeyboardInterrupt:
         print("\n[STOP] Shutting down producer...")
     finally:
