@@ -195,27 +195,69 @@ function Dendrogram({ features, cluster }) {
   const clusterCol = { 0: '#e3566c', 1: '#f2b001', 2: '#04bd84' }
   const clusterNames = { 0: 'Pro-Dollar', 1: 'Transisi', 2: 'Mendekati Yuan' }
 
-  let lines = []
-  for (const m of merges) {
-    const lLeaves = getLeaves(m.left), rLeaves = getLeaves(m.right)
-    const lx = LABEL_W + (leafMap[lLeaves[0]] + leafMap[lLeaves[lLeaves.length - 1]]) / 2 * ((W - LABEL_W - PAD) / (N - 1))
-    const rx = LABEL_W + (leafMap[rLeaves[0]] + leafMap[rLeaves[rLeaves.length - 1]]) / 2 * ((W - LABEL_W - PAD) / (N - 1))
-    const my = H - PAD - (m.dist / maxDist) * treeH
-    const by = H - PAD
+  const coords = {}
+  for (let i = 0; i < N; i++) {
+    coords[i] = {
+      x: LABEL_W + leafMap[i] * ((W - LABEL_W - PAD) / (N - 1)),
+      y: H - PAD
+    }
+  }
 
-    const avgLabel = Math.round([...lLeaves, ...rLeaves].reduce((s, i) => s + (pts[i].label ?? 1), 0) / (lLeaves.length + rLeaves.length))
+  merges.forEach((m, idx) => {
+    const id = N + idx
+    const lx = coords[m.left].x
+    const rx = coords[m.right].x
+    const my = H - PAD - (m.dist / maxDist) * treeH
+    coords[id] = {
+      x: (lx + rx) / 2,
+      y: my
+    }
+  })
+
+  let lines = []
+  merges.forEach((m, idx) => {
+    const id = N + idx
+    const lLeaves = getLeaves(id)
+    const avgLabel = Math.round(lLeaves.reduce((s, i) => s + (pts[i].label ?? 1), 0) / lLeaves.length)
     const col = clusterCol[avgLabel] || 'rgba(255,255,255,0.5)'
 
-    for (const leaf of lLeaves) {
-      const x2 = LABEL_W + leafMap[leaf] * ((W - LABEL_W - PAD) / (N - 1))
-      lines.push({ x1: x2.toFixed(1), y1: by, x2: x2.toFixed(1), y2: my.toFixed(1), stroke: col, strokeWidth: 2.5, opacity: 0.5 })
-    }
-    for (const leaf of rLeaves) {
-      const x2 = LABEL_W + leafMap[leaf] * ((W - LABEL_W - PAD) / (N - 1))
-      lines.push({ x1: x2.toFixed(1), y1: by, x2: x2.toFixed(1), y2: my.toFixed(1), stroke: col, strokeWidth: 2.5, opacity: 0.5 })
-    }
-    lines.push({ x1: lx.toFixed(1), y1: my.toFixed(1), x2: rx.toFixed(1), y2: my.toFixed(1), stroke: col, strokeWidth: 3, opacity: 0.8 })
-  }
+    const leftCoord = coords[m.left]
+    const rightCoord = coords[m.right]
+    const parentCoord = coords[id]
+
+    // Left vertical stem
+    lines.push({
+      x1: leftCoord.x.toFixed(1),
+      y1: leftCoord.y.toFixed(1),
+      x2: leftCoord.x.toFixed(1),
+      y2: parentCoord.y.toFixed(1),
+      stroke: col,
+      strokeWidth: 2.5,
+      opacity: 0.5
+    })
+
+    // Right vertical stem
+    lines.push({
+      x1: rightCoord.x.toFixed(1),
+      y1: rightCoord.y.toFixed(1),
+      x2: rightCoord.x.toFixed(1),
+      y2: parentCoord.y.toFixed(1),
+      stroke: col,
+      strokeWidth: 2.5,
+      opacity: 0.5
+    })
+
+    // Horizontal bridge
+    lines.push({
+      x1: leftCoord.x.toFixed(1),
+      y1: parentCoord.y.toFixed(1),
+      x2: rightCoord.x.toFixed(1),
+      y2: parentCoord.y.toFixed(1),
+      stroke: col,
+      strokeWidth: 3,
+      opacity: 0.8
+    })
+  })
 
   return (
     <svg viewBox={`0 0 ${W} ${H + 30}`} width="100%" style={{ maxHeight: H + 30 }}>
@@ -231,14 +273,6 @@ function Dendrogram({ features, cluster }) {
           </g>
         )
       })}
-      <g transform={`translate(${W - 100}, 8)`}>
-        {[0, 1, 2].map(k => (
-          <g key={k} transform={`translate(0, ${k * 14})`}>
-            <circle cx="4" cy="4" r="3.5" fill={clusterCol[k]} />
-            <text x="12" y="6" fontSize="7" fill="rgba(255,255,255,0.5)">{clusterNames[k]}</text>
-          </g>
-        ))}
-      </g>
     </svg>
   )
 }
