@@ -168,7 +168,7 @@ async def run_clustering_logic():
         # Build feature matrix: latest snapshot per currency_pair
         latest_ts = df_features.groupby('currency_pair')['ts'].max().reset_index()
         df_latest = pd.merge(latest_ts, df_features, on=['currency_pair', 'ts'], how='left')
-        df_latest = df_latest.dropna(subset=['corr_dxy_20d', 'corr_cny_20d', 'volatility_20d'])
+        df_latest = df_latest.dropna(subset=['corr_dxy_20d', 'corr_cny_20d', 'volatility_20d']).reset_index(drop=True)
 
         if df_latest.empty:
             logger.warning("Auto-trigger: no valid feature rows after dedup.")
