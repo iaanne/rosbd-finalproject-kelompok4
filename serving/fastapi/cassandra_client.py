@@ -168,8 +168,22 @@ def insert_clustering_result(data: dict):
 
 def list_batch_ids(limit: int = 20):
     try:
-        rows = _session.execute(_batch_select, (limit,))
-        return [r["batch_id"] for r in rows]
+        # Ambil dari tabel notifications yang terurut secara kronologis (ts DESC)
+        rows = _session.execute("SELECT batch_id FROM notifications WHERE bucket = 'all' LIMIT 100")
+        batches = []
+        seen = set()
+        for r in rows:
+            b_id = r.get("batch_id")
+            if b_id and b_id not in seen:
+                seen.add(b_id)
+                batches.append(b_id)
+                if len(batches) >= limit:
+                    break
+        # Jika tabel notifications kosong, gunakan fallback query DISTINCT (token order)
+        if not batches:
+            rows = _session.execute(_batch_select, (limit,))
+            batches = [r["batch_id"] for r in rows]
+        return batches
     except Exception as e:
         logger.error("Error listing batch ids: %s", e)
         return []
