@@ -317,10 +317,22 @@ export default function App() {
     for (const b of batches) {
       const r = await api(`/api/clustering-results/${b}`)
       if (r && r.length) {
+        // Cari algoritma terbaik (K-Means vs AHC) dengan Silhouette Score tertinggi di batch ini
+        let bestAlgo = 'K-Means'
+        let maxSil = -2
         for (const c of r) {
-          const key = c.currency_pair
-          if (!allClusterResults[key] || new Date(c.ts) > new Date(allClusterResults[key].ts)) {
-            allClusterResults[key] = c
+          if (c.algorithm !== 'DBSCAN' && (c.silhouette_score ?? -2) > maxSil) {
+            maxSil = c.silhouette_score
+            bestAlgo = c.algorithm
+          }
+        }
+        // Hanya simpan hasil dari algoritma terbaik untuk kartu & scatter plot
+        for (const c of r) {
+          if (c.algorithm === bestAlgo) {
+            const key = c.currency_pair
+            if (!allClusterResults[key] || new Date(c.ts) > new Date(allClusterResults[key].ts)) {
+              allClusterResults[key] = c
+            }
           }
         }
       }
