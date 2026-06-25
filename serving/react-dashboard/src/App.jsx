@@ -497,7 +497,7 @@ export default function App() {
     kpiCards = [
       { l: 'Komposisi cluster', v: cStr || '-', c: 'Pro-Dollar · Transisi · Yuan' },
       { l: 'Outlier hari ini', v: String(outliers.length), c: outC },
-      { l: 'Paling volatil', v: mostVol, c: mostVolVal ? `volatility ${fmt(mostVolVal)}` : '-' },
+      { l: 'Paling volatil', v: mostVol, c: mostVolVal ? `volatility ${fmt(mostVolVal, mostVolVal < 0.01 ? 5 : 2)}` : '-' },
       { l: 'Sinyal hedging aktif', v: String(hedges.length), c: hedges.length ? hedges.join(', ') : 'Tidak ada' },
     ]
   } else {
