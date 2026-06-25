@@ -35,6 +35,9 @@ _batch_select = None
 
 _pairs_select = None
 
+_metrics_insert = None
+_metrics_select = None
+
 _notification_insert = None
 _notification_select = None
 
@@ -45,6 +48,7 @@ def init():
     global _features_select, _feature_insert, _all_features_select
     global _clustering_insert, _clustering_select, _batch_select
     global _pairs_select
+    global _metrics_insert, _metrics_select
     global _notification_insert, _notification_select
 
     _cluster = Cluster([CASSANDRA_HOST])
@@ -92,11 +96,20 @@ def init():
     )
 
     _notification_insert = _session.prepare(
-        "INSERT INTO notifications (bucket, ts, id, type, title, message, batch_id, algorithm) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+        "INSERT INTO notifications (bucket, ts, id, type, title, message, severity, category, batch_id, algorithm) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
     )
     _notification_select = _session.prepare(
         "SELECT * FROM notifications WHERE bucket = ? ORDER BY ts DESC LIMIT ?"
+    )
+
+    _metrics_insert = _session.prepare(
+        "INSERT INTO clustering_metrics (batch_id, ts, kmeans_k, kmeans_silhouette, "
+        "dbscan_noise_ratio, dbscan_silhouette, ahc_silhouette, dendrogram_linkage, labels_order) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
+    )
+    _metrics_select = _session.prepare(
+        "SELECT * FROM clustering_metrics WHERE batch_id = ?"
     )
 
 
@@ -209,7 +222,8 @@ def insert_notification(notif: dict):
             _notification_insert,
             (
                 bucket, ts, notif_id,
-                notif["type"], notif["title"], notif["message"],
+                notif.get("type", ""), notif.get("title", ""), notif.get("message", ""),
+                notif.get("severity", ""), notif.get("category", ""),
                 notif.get("batch_id", ""), notif.get("algorithm", ""),
             ),
         )
@@ -264,4 +278,101 @@ def get_all_features():
         return [clean_dict_floats(dict(r)) for r in rows]
     except Exception as e:
         logger.error("Error fetching all features: %s", e)
+        return []
+
+
+def get_latest_clustering_summary():
+    try:
+        rows = _session.execute(
+            "SELECT batch_id, ts, algorithm, currency_pair, cluster_label, cluster_name, is_outlier, silhouette_score "
+            "FROM clustering_results"
+        )
+        results = [dict(r) for r in rows]
+        if not results:
+            return {"status": "no_data", "message": "Belum ada hasil clustering.", "results": []}
+
+        latest_ts = max(r["ts"] for r in results)
+        now = datetime.now(timezone.utc)
+        if latest_ts.tzinfo is None:
+            latest_ts = latest_ts.replace(tzinfo=timezone.utc)
+        stale_threshold = 3600
+        is_stale = (now - latest_ts).total_seconds() > stale_threshold
+
+        summary = {}
+        latest_by_pair = {}
+        for r in results:
+            pair = r["currency_pair"]
+            ts = r["ts"]
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=timezone.utc)
+            if pair not in latest_by_pair or ts > latest_by_pair[pair]:
+                latest_by_pair[pair] = ts
+                summary[pair] = {
+                    "ts": ts.isoformat(),
+                    "currency_pair": pair,
+                    "cluster_label": r["cluster_label"],
+                    "cluster_name": r["cluster_name"],
+                    "is_outlier": r["is_outlier"],
+                    "algorithm": r["algorithm"],
+                    "silhouette_score": r["silhouette_score"],
+                }
+
+        return {
+            "status": "stale" if is_stale else "ok",
+            "latest_ts": latest_ts.isoformat(),
+            "is_stale": is_stale,
+            "message": "Data clustering basi — terakhir {}.".format(latest_ts.strftime('%d %b %H:%M UTC')) if is_stale else "Data clustering terkini.",
+            "results": list(summary.values()),
+        }
+    except Exception as e:
+        logger.error("Error fetching latest clustering summary: %s", e)
+        return {"status": "error", "message": str(e), "results": []}
+
+
+def insert_clustering_metrics(data: dict):
+    try:
+        _session.execute(
+            _metrics_insert,
+            (
+                data["batch_id"], data["ts"],
+                data.get("kmeans_k"), data.get("kmeans_silhouette"),
+                data.get("dbscan_noise_ratio"), data.get("dbscan_silhouette"),
+                data.get("ahc_silhouette"), data.get("dendrogram_linkage"),
+                data.get("labels_order"),
+            ),
+        )
+    except Exception as e:
+        logger.error("Error inserting clustering metrics: %s", e)
+        raise
+
+
+def get_clustering_metrics(batch_id: str):
+    try:
+        rows = _session.execute(_metrics_select, (batch_id,))
+        return [dict(r) for r in rows]
+    except Exception as e:
+        logger.error("Error fetching clustering metrics: %s", e)
+        return []
+
+
+def get_latest_clustering_metrics():
+    try:
+        batch_rows = _session.execute(
+            "SELECT batch_id, ts FROM clustering_results LIMIT 100"
+        )
+        batches = {}
+        for r in batch_rows:
+            bid = r["batch_id"]
+            ts = r["ts"]
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=timezone.utc)
+            if bid not in batches or ts > batches[bid]:
+                batches[bid] = ts
+        if not batches:
+            return []
+        latest_batch = max(batches, key=lambda b: batches[b])
+        rows = _session.execute(_metrics_select, (latest_batch,))
+        return [dict(r) for r in rows]
+    except Exception as e:
+        logger.error("Error fetching latest clustering metrics: %s", e)
         return []

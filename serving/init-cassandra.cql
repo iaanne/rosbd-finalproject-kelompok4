@@ -46,7 +46,20 @@ CREATE TABLE IF NOT EXISTS clustering_results (
     PRIMARY KEY ((batch_id), ts, algorithm, currency_pair)
 ) WITH CLUSTERING ORDER BY (ts DESC);
 
--- Tabel 4: notifications (untuk real-time notifikasi)
+-- Tabel 4A: clustering_metrics (metrik per batch)
+CREATE TABLE IF NOT EXISTS clustering_metrics (
+  batch_id TEXT PRIMARY KEY,
+  ts TIMESTAMP,
+  kmeans_k INT,
+  kmeans_silhouette DOUBLE,
+  dbscan_noise_ratio DOUBLE,
+  dbscan_silhouette DOUBLE,
+  ahc_silhouette DOUBLE,
+  dendrogram_linkage TEXT,
+  labels_order TEXT
+);
+
+-- Tabel 4B: notifications (untuk real-time notifikasi, termasuk alert)
 CREATE TABLE IF NOT EXISTS notifications (
     bucket TEXT,
     ts TIMESTAMP,
@@ -54,6 +67,8 @@ CREATE TABLE IF NOT EXISTS notifications (
     type TEXT,
     title TEXT,
     message TEXT,
+    severity TEXT,
+    category TEXT,
     batch_id TEXT,
     algorithm TEXT,
     PRIMARY KEY ((bucket), ts, id)

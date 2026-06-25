@@ -1,7 +1,6 @@
 from fastapi import WebSocket
 from typing import Set
 import logging
-import json
 from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
@@ -31,17 +30,22 @@ class ConnectionManager:
             self.active_connections -= dead
             logger.warning("Removed %d stale WebSocket connections", len(dead))
 
-    async def broadcast_forex_update(self, data: dict):
-        await self.broadcast({"type": "forex_update", "data": data})
+    async def broadcast_price_update(self, data: dict):
+        await self.broadcast({"type": "price_update", **data})
 
-    async def broadcast_feature_update(self, data: dict):
-        await self.broadcast({"type": "feature_update", "data": data})
+    async def broadcast_alert(self, data: dict):
+        payload = {
+            "type": "alert",
+            "severity": data.get("severity", "info"),
+            "category": data.get("category", "general"),
+            "title": data.get("title", ""),
+            "message": data.get("message", ""),
+            "ts": data.get("ts", datetime.now(timezone.utc).isoformat()),
+        }
+        await self.broadcast(payload)
 
-    async def broadcast_clustering_done(self, data: dict):
-        await self.broadcast({"type": "clustering_done", "data": data})
-
-    async def broadcast_notification(self, data: dict):
-        await self.broadcast({"type": "notification", "data": data})
+    async def broadcast_system(self, data: dict):
+        await self.broadcast({"type": "system", **data})
 
 
 manager = ConnectionManager()

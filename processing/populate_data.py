@@ -1,11 +1,13 @@
 import pandas as pd
 import numpy as np
 from cassandra.cluster import Cluster
-import datetime
+from datetime import datetime, timezone
 import uuid
+from sklearn.cluster import KMeans, DBSCAN, AgglomerativeClustering
+from sklearn.metrics import silhouette_score
 
 # 1. Inisialisasi Koneksi Cassandra
-CASSANDRA_IP = "100.66.223.98"
+CASSANDRA_IP = "localhost"
 print(f"Menghubungkan ke Cassandra di {CASSANDRA_IP}...")
 cluster = Cluster([CASSANDRA_IP])
 session = cluster.connect('dedolarisasi')
@@ -25,16 +27,18 @@ df = df.sort_values(by=['currency_pair', 'ts']).reset_index(drop=True)
 
 # 3. Pisahkan Data DXY dan CNY/USD untuk Perhitungan Korelasi
 print("Menyiapkan data pembanding DXY dan CNY...")
-df_dxy = df[df['currency_pair'] == 'DXY'][['ts', 'close']].rename(columns={'close': 'close_dxy'})
-df_cny = df[df['currency_pair'].isin(['CNY/USD', 'CNY'])][['ts', 'close']].rename(columns={'close': 'close_cny'})
+df['ts'] = pd.to_datetime(df['ts'])
+df = df.sort_values('ts')
+df_dxy = df[df['currency_pair'] == 'DXY'][['ts', 'close']].rename(columns={'close': 'close_dxy'}).drop_duplicates(subset=['ts'])
+df_cny = df[df['currency_pair'].isin(['CNY/USD', 'CNY'])][['ts', 'close']].rename(columns={'close': 'close_cny'}).drop_duplicates(subset=['ts'])
 
-# Gabungkan pembanding ke dataframe utama
-df = pd.merge(df, df_dxy, on='ts', how='left')
-df = pd.merge(df, df_cny, on='ts', how='left')
+# merge_asof: align DXY/CNY ke timestamp terdekat SEBELUMNYA (forward-fill otomatis)
+df = pd.merge_asof(df.sort_values('ts'), df_dxy.sort_values('ts'), on='ts', direction='backward')
+df = pd.merge_asof(df.sort_values('ts'), df_cny.sort_values('ts'), on='ts', direction='backward')
 
-# Isi nilai kosong (jika ada data time mismatch) dengan forward fill
-df['close_dxy'] = df.groupby('currency_pair')['close_dxy'].ffill()
-df['close_cny'] = df.groupby('currency_pair')['close_cny'].ffill()
+# Isi nilai kosong di awal (sebelum data DXY/CNY tersedia) dengan bfill
+df['close_dxy'] = df.groupby('currency_pair')['close_dxy'].bfill()
+df['close_cny'] = df.groupby('currency_pair')['close_cny'].bfill()
 
 # 4. Fungsi Perhitungan Indikator Teknis (RSI)
 def compute_rsi(series, period=14):
@@ -67,9 +71,11 @@ for pair, group in df.groupby('currency_pair'):
     group['rolling_std_5d'] = group['close'].rolling(5).std()
     group['volatility_20d'] = group['log_return'].rolling(20).std()
     
-    # Hitung Korelasi 20 Hari terhadap DXY dan CNY
-    group['corr_dxy_20d'] = group['close'].rolling(20).corr(group['close_dxy'])
-    group['corr_cny_20d'] = group['close'].rolling(20).corr(group['close_cny'])
+    # Hitung Korelasi 20 Hari terhadap DXY dan CNY (pada return, bukan level)
+    group['dxy_return'] = group['close_dxy'].pct_change().fillna(0)
+    group['cny_return'] = group['close_cny'].pct_change().fillna(0)
+    group['corr_dxy_20d'] = group['log_return'].rolling(20).corr(group['dxy_return'])
+    group['corr_cny_20d'] = group['log_return'].rolling(20).corr(group['cny_return'])
     
     # Hitung RSI dan Bollinger Bands
     group['rsi_14'] = compute_rsi(group['close'], 14)
@@ -92,67 +98,133 @@ INSERT INTO features (
 ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
 """
 
-for _, row in df_features.iterrows():
-    session.execute(insert_feature_query, (
-        row['currency_pair'],
-        row['ts'],
-        float(row['returns_1d']) if not pd.isna(row['returns_1d']) else None,
-        float(row['log_return']) if not pd.isna(row['log_return']) else None,
-        float(row['rolling_mean_5d']) if not pd.isna(row['rolling_mean_5d']) else None,
-        float(row['rolling_mean_20d']) if not pd.isna(row['rolling_mean_20d']) else None,
-        float(row['rolling_std_5d']) if not pd.isna(row['rolling_std_5d']) else None,
-        float(row['volatility_20d']) if not pd.isna(row['volatility_20d']) else None,
-        float(row['corr_dxy_20d']) if not pd.isna(row['corr_dxy_20d']) else None,
-        float(row['corr_cny_20d']) if not pd.isna(row['corr_cny_20d']) else None,
-        float(row['rsi_14']) if not pd.isna(row['rsi_14']) else None,
-        float(row['bb_upper']) if not pd.isna(row['bb_upper']) else None,
-        float(row['bb_lower']) if not pd.isna(row['bb_lower']) else None
-    ))
+for idx, row in df_features.iterrows():
+    ts_val = row['ts']
+    if isinstance(ts_val, pd.Timestamp):
+        ts_val = ts_val.to_pydatetime()
+    if hasattr(ts_val, 'tzinfo') and ts_val.tzinfo is None:
+        ts_val = ts_val.replace(tzinfo=timezone.utc)
+    try:
+        session.execute(insert_feature_query, (
+            row['currency_pair'],
+            ts_val,
+            float(row['returns_1d']) if not pd.isna(row['returns_1d']) else None,
+            float(row['log_return']) if not pd.isna(row['log_return']) else None,
+            float(row['rolling_mean_5d']) if not pd.isna(row['rolling_mean_5d']) else None,
+            float(row['rolling_mean_20d']) if not pd.isna(row['rolling_mean_20d']) else None,
+            float(row['rolling_std_5d']) if not pd.isna(row['rolling_std_5d']) else None,
+            float(row['volatility_20d']) if not pd.isna(row['volatility_20d']) else None,
+            float(row['corr_dxy_20d']) if not pd.isna(row['corr_dxy_20d']) else None,
+            float(row['corr_cny_20d']) if not pd.isna(row['corr_cny_20d']) else None,
+            float(row['rsi_14']) if not pd.isna(row['rsi_14']) else None,
+            float(row['bb_upper']) if not pd.isna(row['bb_upper']) else None,
+            float(row['bb_lower']) if not pd.isna(row['bb_lower']) else None
+        ))
+    except Exception as e:
+        print(f"ERROR row {idx}: {row['currency_pair']} ts={repr(ts_val)} type={type(ts_val)} -> {e}")
+        raise
 
-# 7. Jalankan Algoritma Klastering Sederhana (Rule-Based & Outlier Detection)
-print("Menjalankan analisis klastering & deteksi outlier...")
-clustering_results = []
+# 7. Jalankan Klastering dengan K-Means + DBSCAN + AHC
+print("Menjalankan K-Means + DBSCAN + AHC clustering...")
 batch_id = str(uuid.uuid4())[:8]
 
-# Hitung rata-rata volatilitas untuk threshold outlier
-mean_vol = df_features['volatility_20d'].mean()
+# Ambil data unik per currency_pair (snapshot terbaru)
+latest_ts = df_features.groupby('currency_pair')['ts'].max().reset_index()
+df_latest = pd.merge(latest_ts, df_features, on=['currency_pair', 'ts'], how='left')
+df_latest = df_latest.dropna(subset=['corr_dxy_20d', 'corr_cny_20d', 'volatility_20d'])
 
-for _, row in df_features.iterrows():
-    corr_dxy = row['corr_dxy_20d']
-    corr_cny = row['corr_cny_20d']
-    vol = row['volatility_20d']
-    
-    # Pengelompokan Klaster (Rule-Based)
-    if corr_dxy > 0.5 and corr_cny < 0.3:
-        label = 0
-        name = "Pro-Dollar"
-    elif corr_cny > 0.5 and corr_dxy < 0.3:
-        label = 2
-        name = "Mendekati Yuan"
-    else:
-        label = 1
-        name = "Transisi"
-        
-    # Deteksi Outlier (DBSCAN Simulation)
-    # Jika volatilitas 2.5x lebih besar dari rata-rata pasar
-    is_outlier = bool(vol > (mean_vol * 2.5))
-    
-    # Silhouette score dummy (berkisar 0.5 - 0.8 untuk data teratur)
-    silhouette = float(0.65 + 0.1 * np.sin(label))
+X = df_latest[['corr_dxy_20d', 'corr_cny_20d', 'volatility_20d']].values
+n = len(X)
 
-    clustering_results.append((
-        batch_id,
-        row['ts'],
-        "K-Means + DBSCAN",
-        row['currency_pair'],
-        label,
-        name,
-        is_outlier,
-        silhouette
-    ))
+print(f"Running clustering on {n} currency pairs...")
+
+if n == 0:
+    print("ERROR: Tidak ada pair yang valid setelah dropna. Cek apakah DXY/CNY alignment berhasil.")
+    exit(1)
+
+# ── 1. K-Means (k=3) ────────────────────────────────
+kmeans = KMeans(n_clusters=min(3, n), random_state=42, n_init=10)
+km_labels_raw = kmeans.fit_predict(X)
+km_sil = silhouette_score(X, km_labels_raw) if n >= 4 and len(set(km_labels_raw)) > 1 else 0.0
+
+# ── 2. DBSCAN ────────────────────────────────────────
+dbscan = DBSCAN(eps=0.3, min_samples=2)
+db_labels_raw = dbscan.fit_predict(X)
+db_sil = silhouette_score(X, db_labels_raw) if n >= 4 and len(set(db_labels_raw)) > 1 else 0.0
+
+# ── 3. AHC ───────────────────────────────────────────
+ahc = AgglomerativeClustering(n_clusters=min(3, n))
+ahc_labels_raw = ahc.fit_predict(X)
+ahc_sil = silhouette_score(X, ahc_labels_raw) if n >= 4 and len(set(ahc_labels_raw)) > 1 else 0.0
+
+# ── Helper: relabel arbitrary cluster IDs to canonical 0/1/2 ──
+def relabel_by_centroid(labels_raw):
+    unique = sorted(set(labels_raw) - {-1})
+    if len(unique) < 2:
+        return [1] * len(labels_raw)
+    centroids_ = np.array([
+        [X[labels_raw == c, 0].mean(), X[labels_raw == c, 1].mean()]
+        for c in unique
+    ])
+    order = sorted(range(len(unique)), key=lambda i: (centroids_[i, 0], centroids_[i, 1]))
+    c0 = unique[order[-1]]   # highest corr_dxy → Pro-Dollar
+    c2 = unique[order[0]]    # lowest corr_dxy  → Yuan
+    c1 = unique[order[1]] if len(order) >= 3 else unique[0]
+    mapping = {c0: 0, c1: 1, c2: 2}
+    return [mapping.get(l, 1) if l != -1 else 1 for l in labels_raw]
+
+# ── Relabel K-Means ──────────────────────────────────
+centroids = kmeans.cluster_centers_
+k = len(centroids)
+centroid_order = sorted(range(k), key=lambda i: (centroids[i, 0], centroids[i, 1]))
+km_label_map = {}
+if k >= 1: km_label_map[centroid_order[-1]] = 0      # highest corr_dxy → Pro-Dollar
+if k >= 2: km_label_map[centroid_order[0]] = 2       # lowest corr_dxy  → Yuan
+if k >= 3: km_label_map[centroid_order[1]] = 1       # middle corr_dxy → Transisi
+elif k == 2: km_label_map[centroid_order[0]] = 1     # only 2 clusters → Transisi
+km_labels = [km_label_map.get(l, 1) for l in km_labels_raw]
+
+db_labels = relabel_by_centroid(db_labels_raw)
+ahc_labels = relabel_by_centroid(ahc_labels_raw)
+
+name_map = {0: "Pro-Dollar", 1: "Transisi", 2: "Yuan"}
+mean_vol = df_latest['volatility_20d'].mean()
+
+clustering_results = []
+for algo_name, labels, sil_score in [
+    ("K-Means", km_labels, km_sil),
+    ("DBSCAN", db_labels, db_sil),
+    ("AHC", ahc_labels, ahc_sil),
+]:
+    for i, row in df_latest.iterrows():
+        canonical = int(labels[i]) if i < len(labels) else 1
+        if canonical not in (0, 1, 2):
+            canonical = 1
+        name = name_map.get(canonical, "Transisi")
+        is_outlier = bool(row['volatility_20d'] > (mean_vol * 2.5)) if mean_vol > 0 else False
+
+        ts_val_cluster = row['ts']
+        if isinstance(ts_val_cluster, pd.Timestamp):
+            ts_val_cluster = ts_val_cluster.to_pydatetime()
+        if hasattr(ts_val_cluster, 'tzinfo') and ts_val_cluster.tzinfo is None:
+            ts_val_cluster = ts_val_cluster.replace(tzinfo=timezone.utc)
+
+        clustering_results.append((
+            batch_id,
+            ts_val_cluster,
+            algo_name,
+            row['currency_pair'],
+            canonical,
+            name,
+            is_outlier,
+            float(sil_score),
+        ))
+
+avg_sil = (km_sil + db_sil + ahc_sil) / 3
+print(f"Clustering selesai — Silhouette: K-Means={km_sil:.3f}, DBSCAN={db_sil:.3f}, AHC={ahc_sil:.3f}, Rata-rata={avg_sil:.3f}")
 
 # 8. Simpan Hasil Klastering ke Cassandra
-print("Menyimpan hasil klastering ke tabel clustering_results...")
+print(f"Menyimpan {len(clustering_results)} hasil klastering ke tabel clustering_results (batch {batch_id})...")
 insert_cluster_query = """
 INSERT INTO clustering_results (
     batch_id, ts, algorithm, currency_pair, cluster_label, cluster_name, is_outlier, silhouette_score
