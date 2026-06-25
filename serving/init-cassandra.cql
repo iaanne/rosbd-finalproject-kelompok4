@@ -59,7 +59,15 @@ CREATE TABLE IF NOT EXISTS clustering_metrics (
   labels_order TEXT
 );
 
--- Tabel 4B: notifications (untuk real-time notifikasi, termasuk alert)
+-- Tabel 4B: batch_index (indeks kronologis batch clustering)
+CREATE TABLE IF NOT EXISTS batch_index (
+    bucket TEXT,
+    ts TIMESTAMP,
+    batch_id TEXT,
+    PRIMARY KEY ((bucket), ts)
+) WITH CLUSTERING ORDER BY (ts DESC);
+
+-- Tabel 4C: notifications (untuk real-time notifikasi, termasuk alert)
 CREATE TABLE IF NOT EXISTS notifications (
     bucket TEXT,
     ts TIMESTAMP,

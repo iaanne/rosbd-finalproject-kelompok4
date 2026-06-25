@@ -6,7 +6,6 @@ from datetime import datetime, timezone
 from aiokafka import AIOKafkaConsumer
 
 from main import run_compute_features_logic
-from notifications import manager
 import email_client
 
 logger = logging.getLogger(__name__)
@@ -70,7 +69,8 @@ async def start_kafka_consumer():
                         # Format timestamp as string for JSON serialization
                         websocket_payload = forex_data.copy()
                         websocket_payload["ts"] = ts.isoformat()
-                        await manager.broadcast_price_update(websocket_payload)
+                        from main import ws_broadcast
+                        await ws_broadcast({"type": "price_update", **websocket_payload})
                         
                         # 4. Trigger feature calculation asynchronously in thread pool (non-blocking)
                         asyncio.create_task(asyncio.to_thread(run_compute_features_logic))
