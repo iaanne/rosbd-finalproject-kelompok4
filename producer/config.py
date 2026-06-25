@@ -11,6 +11,7 @@ if os.path.exists(env_path):
                 os.environ[key.strip()] = val.strip()
 
 KAFKA_BROKER = os.getenv("KAFKA_BROKER", "localhost:9092")
+print(f"[CONFIG DEBUG] env_path: {env_path}, exists: {os.path.exists(env_path)}, KAFKA_BROKER: {KAFKA_BROKER}", flush=True)
 KAFKA_TOPIC = os.getenv("KAFKA_TOPIC", "forex-raw")
 FETCH_INTERVAL_SECONDS = int(os.getenv("FETCH_INTERVAL_SECONDS", "60"))
 
