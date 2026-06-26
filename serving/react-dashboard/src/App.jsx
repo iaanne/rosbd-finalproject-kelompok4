@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 
-const API = ''
+const API = import.meta.env.VITE_API_URL || ''
 const PAIRS = ['IDR', 'THB', 'MYR', 'SGD', 'PHP', 'VND']
 const ALL = [...PAIRS, 'CNY', 'DXY']
 const CLUSTER_NAMES = { 0: 'Pro-Dollar', 1: 'Transisi', 2: 'Mendekati Yuan' }
@@ -407,7 +407,8 @@ export default function App() {
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
     let ws = null
     const connectWS = () => {
-      ws = new WebSocket(`${protocol}//${window.location.host}/ws`)
+      const wsHost = import.meta.env.VITE_WS_URL || window.location.host;
+      ws = new WebSocket(`${protocol}//${wsHost}/ws`)
       ws.onmessage = (e) => {
         try {
           const msg = JSON.parse(e.data)
@@ -520,7 +521,6 @@ export default function App() {
     kpiCards = [
       { l: 'Indeks Kerentanan IDR', v: String(ikrVal), c: <Chip text={ikrLabel} kind={ikrChip} /> },
       { l: 'Ranking IDR', v: `#${idrRank} / ${total}`, c: `paling rentan ke-${idrRank} ASEAN` },
-      { l: 'Δ corr_dxy IDR', v: corrV, c: corrC },
       { l: 'Status alert IDR', v: status, c: <Chip text={status} kind={statusC} /> },
     ]
   }
@@ -585,7 +585,7 @@ export default function App() {
           {cells}
         </div>
 
-        <div className="grid grid-cols-4 gap-3.5 mb-3.5 max-md:grid-cols-2">
+        <div className={`grid gap-3.5 mb-3.5 max-md:grid-cols-2 ${kpiCards.length === 3 ? 'grid-cols-3' : 'grid-cols-4'}`}>
           {kpiCards.map((k, i) => (
             <div className="border border-border-soft rounded-xl bg-surface/80 shadow-lg p-3.5 glass transition-all duration-200 hover:scale-[1.02] hover:border-blue-brand/30" key={i}>
               <div className="text-xs text-text-soft font-semibold">{k.l}</div>
@@ -654,25 +654,10 @@ export default function App() {
         </div>
 
         <div className="grid grid-cols-12 gap-3.5 mb-3.5">
-          <div className="col-span-7 max-lg:col-span-12 border border-border-soft rounded-xl bg-surface/80 shadow-lg p-4 glass transition-all duration-200 hover:border-blue-brand/20">
+          <div className="col-span-12 border border-border-soft rounded-xl bg-surface/80 shadow-lg p-4 glass transition-all duration-200 hover:border-blue-brand/20">
             <h3 className="text-sm font-semibold m-0 mb-0.5">Dendrogram AHC</h3>
             <p className="text-xs text-text-soft m-0 mb-3">Hierarki kedekatan antar mata uang berdasarkan corr_dxy & corr_cny.</p>
             <Dendrogram features={features} cluster={cluster} />
-          </div>
-          <div className="col-span-5 max-lg:col-span-12 border border-border-soft rounded-xl bg-surface/80 shadow-lg p-4 glass transition-all duration-200 hover:border-blue-brand/20">
-            <h3 className="text-sm font-semibold m-0 mb-0.5">Metrik Clustering</h3>
-            <p className="text-xs text-text-soft m-0 mb-3">Silhouette score tiap algoritma — semakin tinggi semakin baik.</p>
-            <div className="text-sm text-text-soft space-y-2">
-              {['K-Means', 'DBSCAN', 'AHC'].map(a => {
-                const v = metrics[a]
-                return (
-                  <div className="flex justify-between py-1 border-b border-border-soft last:border-b-0" key={a}>
-                    <span>{a}</span>
-                    <span className="font-semibold">{v != null ? fmt(v, 3) : '—'}</span>
-                  </div>
-                )
-              })}
-            </div>
           </div>
         </div>
 
