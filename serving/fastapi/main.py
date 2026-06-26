@@ -731,3 +731,14 @@ def read_currency_pairs():
 @app.get("/api/health")
 def health():
     return {"status": "ok"}
+
+
+@app.get("/api/test-alert")
+async def test_alert(title: str = "Test Alert", message: str = "Ini adalah notifikasi dummy untuk pengujian Telegram.", severity: str = "info"):
+    await emit_alert({
+        "title": title,
+        "message": message,
+        "severity": severity,
+        "category": "test"
+    })
+    return {"status": "alert_emitted", "title": title, "message": message, "severity": severity}
