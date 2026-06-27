@@ -78,16 +78,9 @@ services:
       - CASSANDRA_HOST=cassandra
       - ELASTICSEARCH_HOST=http://elasticsearch:9200
       - KAFKA_BOOTSTRAP_SERVERS=host.docker.internal:9092
-      - SMTP_HOST=${SMTP_HOST:-}
-      - SMTP_PORT=${SMTP_PORT:-587}
-      - SMTP_USER=${SMTP_USER:-}
-      - SMTP_PASS=${SMTP_PASS:-}
-      - SMTP_FROM=${SMTP_FROM:-alert@dedolarisasi.com}
-      - ALERT_EMAIL_BI=${ALERT_EMAIL_BI:-}
-      - ALERT_EMAIL_INVESTOR=${ALERT_EMAIL_INVESTOR:-}
       - IDR_VOLATILITY_THRESHOLD=${IDR_VOLATILITY_THRESHOLD:-0.005}
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
-      - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID:-}
+      - TELEGRAM_CHAT_ID_INVESTOR=${TELEGRAM_CHAT_ID_INVESTOR:-}
     volumes:
       - ./serving/fastapi:/app
 

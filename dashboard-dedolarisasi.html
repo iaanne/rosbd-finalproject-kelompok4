@@ -598,6 +598,7 @@ body[data-lens="bi"] .only-investor { display:none !important; }
 .card .hint { font-size:12px; color:var(--notion-text-soft); margin:0 0 12px; }
 .col-7{grid-column:span 7;} .col-5{grid-column:span 5;} .col-6{grid-column:span 6;} .col-12{grid-column:span 12;}
 .kpi-row{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:14px;}
+.kpi-row.only-bi{grid-template-columns:repeat(3,1fr);}
 .kpi{border:1px solid var(--notion-border-soft);border-radius:12px;background:var(--notion-surface);box-shadow:var(--notion-shadow);padding:14px;}
 .kpi .l{font-size:12px;color:var(--notion-text-soft);font-weight:600;}
 .kpi .v{font-size:26px;font-weight:700;letter-spacing:-0.03em;font-variant-numeric:tabular-nums;margin-top:4px;}
@@ -621,7 +622,7 @@ body[data-lens="bi"] .only-investor { display:none !important; }
 .rank .idr{font-weight:700;color:var(--notion-blue);}
 table{margin:0;}
 th,td{padding:8px 10px;font-size:13px;}
-@media (max-width:900px){ .col-7,.col-5,.col-6{grid-column:span 12;} .kpi-row{grid-template-columns:repeat(2,1fr);} }
+@media (max-width:900px){ .col-7,.col-5,.col-6{grid-column:span 12;} .kpi-row, .kpi-row.only-bi{grid-template-columns:repeat(2,1fr);} }
 </style>
 <div class="dash-wrap">
 
@@ -677,7 +678,6 @@ th,td{padding:8px 10px;font-size:13px;}
   <div class="kpi-row only-bi">
     <div class="kpi"><div class="l">Indeks Kerentanan IDR</div><div class="v">68</div><div class="c"><span class="chip chip-orange">Sedang–Tinggi</span></div></div>
     <div class="kpi"><div class="l">Ranking IDR</div><div class="v">#2 / 6</div><div class="c">paling rentan ke-2 ASEAN</div></div>
-    <div class="kpi"><div class="l">Δ corr_dxy IDR (7h)</div><div class="v">+0,06</div><div class="c"><span class="chip chip-red">ketergantungan USD naik</span></div></div>
     <div class="kpi"><div class="l">Status alert IDR</div><div class="v">Waspada</div><div class="c">mendekati ambang</div></div>
   </div>
 

@@ -221,7 +221,7 @@ curl http://localhost:8000/api/batches?limit=3
 3. Set di `.env` root project:
    ```
    TELEGRAM_BOT_TOKEN=your_bot_token
-   TELEGRAM_CHAT_ID=-1001234567890
+   TELEGRAM_CHAT_ID_INVESTOR=-1001234567890
    ```
 4. Restart FastAPI: `docker compose -f docker-compose-laptop3.yml up -d fastapi`
 

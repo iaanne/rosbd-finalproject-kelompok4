@@ -286,29 +286,234 @@ function TrendChart({ features }) {
   const cDxy = pts.map(p => p.corr_dxy_20d != null ? p.corr_dxy_20d : null).filter(v => v != null)
   const vol = pts.map(p => p.volatility_20d != null ? p.volatility_20d : null).filter(v => v != null)
   if (!cDxy.length && !vol.length) return <div className="text-sm text-text-soft py-2">Data corr_dxy & volatility belum tersedia (butuh 20+ titik data untuk rolling window)</div>
-  const allV = [...cDxy, ...vol]
-  let yMin = Math.min(...allV), yMax = Math.max(...allV)
-  if (yMax - yMin < 0.1) { const m = (yMin + yMax) / 2; yMin = m - 0.25; yMax = m + 0.25 }
+  
+  // Scale for Correlation (cDxy): typically -1.0 to 1.0, but we auto-zoom to the data range
+  let yMinC = Math.min(...cDxy), yMaxC = Math.max(...cDxy)
+  if (yMaxC - yMinC < 0.2) {
+    const m = (yMinC + yMaxC) / 2
+    yMinC = Math.max(-1.0, m - 0.1)
+    yMaxC = Math.min(1.0, m + 0.1)
+  }
+  const syC = (v) => H - PAD - ((v - yMinC) / (yMaxC - yMinC)) * (H - 2 * PAD)
+  
+  // Scale for Volatility (vol): typically 0.0 to 0.02, auto-zoomed
+  let yMinV = Math.min(...vol), yMaxV = Math.max(...vol)
+  if (yMaxV - yMinV < 0.002) {
+    const m = (yMinV + yMaxV) / 2
+    yMinV = Math.max(0.0, m - 0.001)
+    yMaxV = m + 0.001
+  }
+  const syV = (v) => H - PAD - ((v - yMinV) / (yMaxV - yMinV)) * (H - 2 * PAD)
+
   const sx = (i) => PAD + (i / (pts.length - 1)) * (W - 2 * PAD)
-  const sy = (v) => H - PAD - ((v - yMin) / (yMax - yMin)) * (H - 2 * PAD)
-  const cDxyPath = cDxy.map((v, i) => `${i === 0 ? 'M' : 'L'} ${sx(i).toFixed(1)} ${sy(v).toFixed(1)}`).join(' ')
-  const volPath = vol.map((v, i) => `${i === 0 ? 'M' : 'L'} ${sx(i).toFixed(1)} ${sy(v).toFixed(1)}`).join(' ')
+  
+  const cDxyPath = cDxy.map((v, i) => `${i === 0 ? 'M' : 'L'} ${sx(i).toFixed(1)} ${syC(v).toFixed(1)}`).join(' ')
+  const volPath = vol.map((v, i) => `${i === 0 ? 'M' : 'L'} ${sx(i).toFixed(1)} ${syV(v).toFixed(1)}`).join(' ')
+
+  const hasDanger = yMaxC >= 0.6
+  const rectY = yMinC >= 0.6 ? PAD : syC(0.6)
+  const rectHeight = yMinC >= 0.6 ? (H - 2 * PAD) : (syC(0.6) - PAD)
+
   return (
     <svg viewBox={`0 0 ${W} ${H + 10}`} width="100%" style={{ maxHeight: 210 }}>
-      {yMax >= 0.6 && (
-        <rect x={PAD} y={sy(0.6)} width={W - 2 * PAD} height={sy(0) - sy(0.6)} fill="rgba(233,115,102,.12)" rx="3" />
+      {hasDanger && (
+        <rect x={PAD} y={rectY} width={W - 2 * PAD} height={rectHeight} fill="rgba(233,115,102,.12)" rx="3" />
       )}
-      {yMax >= 0.6 && (
-        <text x={W - PAD - 2} y={sy(0.6) + 10} fontSize="7" fill="#e3566c" textAnchor="end">zona ambang</text>
+      {hasDanger && (
+        <text x={W - PAD - 2} y={rectY + 10} fontSize="7" fill="#e3566c" textAnchor="end">zona ambang (corr &gt;= 0.6)</text>
       )}
       <line x1={PAD} y1={H - PAD} x2={W - PAD} y2={H - PAD} stroke="rgba(255,255,255,0.1)" />
       <line x1={PAD} y1={PAD} x2={PAD} y2={H - PAD} stroke="rgba(255,255,255,0.1)" />
       <text x={W / 2} y={H + 6} fontSize="8" fill="rgba(255,255,255,0.3)" textAnchor="middle">waktu →</text>
       {cDxy.length > 1 && <path d={cDxyPath} fill="none" stroke="#04bd84" strokeWidth="2.5" />}
       {vol.length > 1 && <path d={volPath} fill="none" stroke="#f2b001" strokeWidth="2" strokeDasharray="4 3" />}
-      {cDxy.length > 0 && <circle cx={sx(pts.length - 1)} cy={sy(cDxy[cDxy.length - 1])} r="3" fill="#04bd84" />}
-      {vol.length > 0 && <circle cx={sx(pts.length - 1)} cy={sy(vol[vol.length - 1])} r="3" fill="#f2b001" />}
+      {cDxy.length > 0 && <circle cx={sx(pts.length - 1)} cy={syC(cDxy[cDxy.length - 1])} r="3" fill="#04bd84" />}
+      {vol.length > 0 && <circle cx={sx(pts.length - 1)} cy={syV(vol[vol.length - 1])} r="3" fill="#f2b001" />}
     </svg>
+  )
+}
+
+function MomentumBar({ features }) {
+  if (!features) return <div className="text-sm text-text-soft py-2">Belum ada data returns</div>
+  const currencies = ['IDR', 'THB', 'MYR', 'SGD', 'PHP', 'VND']
+  const data = currencies.map(p => {
+    const arr = features[p] || []
+    const returns_1d = arr.length ? (arr[0].returns_1d ?? 0) : 0
+    return { pair: p, val: returns_1d * 100 }
+  }).sort((a, b) => b.val - a.val)
+
+  const maxVal = Math.max(...data.map(d => Math.abs(d.val)), 0.1)
+  const W = 400, H = 180, PAD_X = 50, PAD_Y = 20
+  const chartW = W - 2 * PAD_X
+  const center = W / 2
+  const barH = 14
+  const gap = 8
+
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} width="100%" style={{ maxHeight: H }}>
+      <line x1={center} y1={PAD_Y} x2={center} y2={H - PAD_Y} stroke="rgba(255,255,255,0.15)" strokeDasharray="3 3" />
+      {data.map((d, i) => {
+        const y = PAD_Y + i * (barH + gap)
+        const valPct = d.val
+        const scaledW = (Math.abs(valPct) / maxVal) * (chartW / 2)
+        const isPos = valPct >= 0
+        const x = isPos ? center : center - scaledW
+        const color = isPos ? '#04bd84' : '#e3566c'
+        const labelX = isPos ? center - 8 : center + 8
+        const textAnchor = isPos ? 'end' : 'start'
+
+        return (
+          <g key={d.pair}>
+            <rect x={x} y={y} width={scaledW} height={barH} fill={color} rx="3" opacity="0.85" />
+            <text x={labelX} y={y + 10} fontSize="9" fill="#fff" fontWeight="700" textAnchor={textAnchor}>{d.pair}</text>
+            <text x={isPos ? x + scaledW + 5 : x - 5} y={y + 10} fontSize="8" fill="rgba(255,255,255,0.6)" textAnchor={isPos ? 'start' : 'end'}>
+              {valPct >= 0 ? '+' : ''}{fmt(valPct, 3)}%
+            </text>
+          </g>
+        )
+      })}
+    </svg>
+  )
+}
+
+function InterventionMatrix({ data, features }) {
+  if (!data || !data.length || !features) return <div className="text-sm text-text-soft py-2">Belum ada data</div>
+  
+  const W = 400, H = 320, PAD = 40
+  const currencies = ['IDR', 'THB', 'MYR', 'SGD', 'PHP', 'VND']
+  const pts = currencies.map(p => {
+    const featArr = features[p] || []
+    const fd = featArr.length ? featArr[0] : {}
+    const cInfo = data.find(c => c.currency_pair === p) || {}
+    return {
+      pair: p,
+      x: fd.corr_dxy_20d ?? 0.5,
+      y: fd.volatility_20d ?? 0.002,
+      isOutlier: cInfo.is_outlier
+    }
+  })
+
+  const xMin = 0.0, xMax = 1.0
+  const yMin = 0.0, yMax = 0.012
+
+  const sx = (v) => PAD + ((v - xMin) / (xMax - xMin)) * (W - 2 * PAD)
+  const sy = (v) => H - PAD - ((v - yMin) / (yMax - yMin)) * (H - 2 * PAD)
+
+  const splitX = sx(0.6)
+  const splitY = sy(0.005)
+
+  return (
+    <svg viewBox={`0 0 ${W} ${H + 20}`} width="100%" style={{ maxHeight: 340 }}>
+      <rect x={splitX} y={PAD} width={W - PAD - splitX} height={splitY - PAD} fill="rgba(227,86,108,0.06)" />
+      <rect x={splitX} y={splitY} width={W - PAD - splitX} height={H - PAD - splitY} fill="rgba(242,176,1,0.04)" />
+      <rect x={PAD} y={PAD} width={splitX - PAD} height={splitY - PAD} fill="rgba(242,176,1,0.06)" />
+      <rect x={PAD} y={splitY} width={splitX - PAD} height={H - PAD - splitY} fill="rgba(4,189,132,0.06)" />
+
+      <line x1={splitX} y1={PAD} x2={splitX} y2={H - PAD} stroke="rgba(255,255,255,0.2)" strokeDasharray="3 3" />
+      <line x1={PAD} y1={splitY} x2={W - PAD} y2={splitY} stroke="rgba(255,255,255,0.2)" strokeDasharray="3 3" />
+
+      <line x1={PAD} y1={H - PAD} x2={W - PAD} y2={H - PAD} stroke="rgba(255,255,255,0.2)" />
+      <line x1={PAD} y1={PAD} x2={PAD} y2={H - PAD} stroke="rgba(255,255,255,0.2)" />
+
+      <text x={W - PAD} y={H - PAD + 14} fontSize="8" fill="rgba(255,255,255,0.4)" textAnchor="end">corr_dxy (USD Dependency)</text>
+      <text x={10} y={PAD + 4} fontSize="8" fill="rgba(255,255,255,0.4)" transform={`rotate(-90 10 ${PAD + 4})`} textAnchor="end">volatility_20d</text>
+
+      <text x={W - PAD - 5} y={PAD + 12} fontSize="7" fill="#e3566c" fontWeight="700" textAnchor="end">INTERVENSI AGRESIF</text>
+      <text x={W - PAD - 5} y={H - PAD - 8} fontSize="7" fill="#f2b001" fontWeight="700" textAnchor="end">PENGAWASAN PASIF</text>
+      <text x={PAD + 5} y={PAD + 12} fontSize="7" fill="#f2b001" fontWeight="700">RISIKO LOKAL / SPEKULASI</text>
+      <text x={PAD + 5} y={H - PAD - 8} fontSize="7" fill="#04bd84" fontWeight="700">AMAN / STABIL</text>
+
+      {pts.map(p => {
+        const isIDR = p.pair === 'IDR'
+        const r = isIDR ? 14 : 8
+        const color = isIDR ? '#04bd84' : 'rgba(255,255,255,0.25)'
+        const strokeColor = isIDR ? '#fff' : 'rgba(255,255,255,0.5)'
+        const cx = sx(p.x)
+        const cy = sy(p.y)
+
+        return (
+          <g key={p.pair}>
+            <circle cx={cx} cy={cy} r={r} fill={color} stroke={strokeColor} strokeWidth="1.5" />
+            <text x={cx} y={cy + 0.4} fontSize={isIDR ? '8' : '6'} fill="#fff" fontWeight="700" textAnchor="middle" dominantBaseline="middle">{p.pair}</text>
+          </g>
+        )
+      })}
+    </svg>
+  )
+}
+
+function ASEANPressureIndex({ data, features }) {
+  if (!data || !data.length || !features) return <div className="text-sm text-text-soft py-2">Belum ada data</div>
+  
+  const currencies = ['IDR', 'THB', 'MYR', 'SGD', 'PHP', 'VND']
+  const pressureData = currencies.map(p => {
+    const featArr = features[p] || []
+    const fd = featArr.length ? featArr[0] : {}
+    const cInfo = data.find(c => c.currency_pair === p) || {}
+    
+    let score = 0
+    if (cInfo.is_outlier) score += 40
+    
+    const vol = fd.volatility_20d ?? 0.002
+    if (vol > 0.008) score += 45
+    else if (vol > 0.005) score += 30
+    else score += (vol / 0.005) * 30
+
+    const ret = fd.returns_1d ?? 0
+    if (ret < -0.002) score += 15
+    else if (ret < 0) score += (Math.abs(ret) / 0.002) * 15
+
+    score = Math.min(100, Math.round(score))
+    return { pair: p, score }
+  })
+
+  const peers = pressureData.filter(d => d.pair !== 'IDR')
+  const avgPeerPressure = Math.round(peers.reduce((acc, curr) => acc + curr.score, 0) / peers.length)
+
+  let status = 'Rendah'
+  let color = '#04bd84'
+  if (avgPeerPressure >= 60) {
+    status = 'Tinggi'
+    color = '#e3566c'
+  } else if (avgPeerPressure >= 35) {
+    status = 'Sedang'
+    color = '#f2b001'
+  }
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-4">
+        <div>
+          <div className="text-xs text-text-soft font-semibold uppercase tracking-wider">Systemic Contagion Risk</div>
+          <div className="text-xl font-bold mt-1" style={{ color }}>{avgPeerPressure}% — {status}</div>
+        </div>
+        <div className="h-2 w-24 rounded-full bg-bg-dark overflow-hidden border border-border-soft">
+          <div className="h-full" style={{ width: `${avgPeerPressure}%`, backgroundColor: color }} />
+        </div>
+      </div>
+      
+      <div className="space-y-3.5 mt-2">
+        {pressureData.map(d => {
+          let barCol = '#04bd84'
+          if (d.score >= 60) barCol = '#e3566c'
+          else if (d.score >= 35) barCol = '#f2b001'
+          
+          return (
+            <div key={d.pair} className="text-xs">
+              <div className="flex justify-between mb-1">
+                <span className={d.pair === 'IDR' ? 'font-bold text-blue-brand' : 'text-text-soft font-medium'}>
+                  {d.pair} {d.pair === 'IDR' ? '(Target)' : ''}
+                </span>
+                <span className="font-semibold">{d.score}%</span>
+              </div>
+              <div className="h-1.5 w-full rounded-full bg-bg-dark overflow-hidden">
+                <div className="h-full rounded-full transition-all duration-500" style={{ width: `${d.score}%`, backgroundColor: barCol }} />
+              </div>
+            </div>
+          )
+        })}
+      </div>
+    </div>
   )
 }
 
@@ -613,108 +818,211 @@ export default function App() {
 
         <div className="h-4" />
 
-        <div className="grid grid-cols-12 gap-3.5 mb-3.5">
-          <div className="col-span-7 max-lg:col-span-12 border border-border-soft rounded-xl bg-surface/80 shadow-lg p-4 glass transition-all duration-200 hover:border-blue-brand/20">
-            <h3 className="text-sm font-semibold m-0 mb-0.5">Peta Cluster Mata Uang</h3>
-            <p className="text-xs text-text-soft m-0 mb-3">
-              {isInv ? 'Kandidat diversifikasi; hindari kuadran Pro-Dollar (kanan-bawah).' : 'Pantau apakah IDR (biru) bergeser ke kuadran rentan dibanding peer ASEAN.'}
-            </p>
-            <ScatterPlot data={cluster} features={features} />
-            <div className="flex flex-wrap gap-3 mt-2 text-xs text-text-soft">
-              <span className="inline-flex items-center gap-1.5"><span className="w-2 h-2 rounded-full inline-block flex-none" style={{ background: '#e3566c' }} />Pro-Dollar</span>
-              <span className="inline-flex items-center gap-1.5"><span className="w-2 h-2 rounded-full inline-block flex-none" style={{ background: '#f2b001' }} />Transisi</span>
-              <span className="inline-flex items-center gap-1.5"><span className="w-2 h-2 rounded-full inline-block flex-none" style={{ background: '#04bd84' }} />Mendekati Yuan</span>
-              <span className="inline-flex items-center gap-1.5"><span className="w-2 h-2 rounded-full inline-block flex-none" style={{ background: '#04bd84' }} />IDR (fokus)</span>
-              <span className="text-text-faint">○ ukuran = volatilitas</span>
-            </div>
-          </div>
-          <div className="col-span-5 max-lg:col-span-12 border border-border-soft rounded-xl bg-surface/80 shadow-lg p-4 glass transition-all duration-200 hover:border-blue-brand/20">
-            <h3 className="text-sm font-semibold m-0 mb-0.5">Indeks Kerentanan IDR (IKR)</h3>
-            <p className="text-xs text-text-soft m-0 mb-3">
-              {isInv ? 'Risiko IDR untuk portofolio berbasis Rupiah.' : 'Seberapa rentan IDR & apakah mendekati ambang intervensi.'}
-            </p>
-            <div className="flex items-center gap-3.5 flex-wrap">
-              <GaugeSVG val={ikrVal} />
-              <div className="text-center">
-                <div className="text-4xl font-bold tracking-tight leading-none">{ikrVal}</div>
-                <Chip text={ikrLabel} kind={ikrChip} />
+        {isInv ? (
+          <>
+            <div className="grid grid-cols-12 gap-3.5 mb-3.5">
+              <div className="col-span-7 max-lg:col-span-12 border border-border-soft rounded-xl bg-surface/80 shadow-lg p-4 glass transition-all duration-200 hover:border-blue-brand/20">
+                <h3 className="text-sm font-semibold m-0 mb-0.5">Peta Cluster Mata Uang</h3>
+                <p className="text-xs text-text-soft m-0 mb-3">
+                  Kandidat diversifikasi; hindari kuadran Pro-Dollar (kanan-bawah).
+                </p>
+                <ScatterPlot data={cluster} features={features} />
+                <div className="flex flex-wrap gap-3 mt-2 text-xs text-text-soft">
+                  <span className="inline-flex items-center gap-1.5"><span className="w-2 h-2 rounded-full inline-block flex-none" style={{ background: '#e3566c' }} />Pro-Dollar</span>
+                  <span className="inline-flex items-center gap-1.5"><span className="w-2 h-2 rounded-full inline-block flex-none" style={{ background: '#f2b001' }} />Transisi</span>
+                  <span className="inline-flex items-center gap-1.5"><span className="w-2 h-2 rounded-full inline-block flex-none" style={{ background: '#04bd84' }} />Mendekati Yuan</span>
+                  <span className="inline-flex items-center gap-1.5"><span className="w-2 h-2 rounded-full inline-block flex-none" style={{ background: '#04bd84' }} />IDR (fokus)</span>
+                  <span className="text-text-faint">○ ukuran = volatilitas</span>
+                </div>
+              </div>
+              <div className="col-span-5 max-lg:col-span-12 border border-border-soft rounded-xl bg-surface/80 shadow-lg p-4 glass transition-all duration-200 hover:border-blue-brand/20 flex flex-col">
+                <h3 className="text-sm font-semibold m-0 mb-0.5">Momentum Harian (Daily Returns)</h3>
+                <p className="text-xs text-text-soft m-0 mb-3">Pergerakan harian 24 jam terakhir terhadap USD.</p>
+                <div className="flex-1 flex items-center justify-center">
+                  <MomentumBar features={features} />
+                </div>
               </div>
             </div>
-            {ranking.length > 0 && (
-              <ul className="list-none p-0 mt-2.5">
-                {ranking.map((c, i) => (
-                  <li key={c.currency_pair} className={`flex justify-between text-sm py-1.5 border-b border-border-soft last:border-b-0 ${c.currency_pair === 'IDR' ? 'font-bold text-blue-brand' : 'text-text-soft'}`}>
-                    <span>{c.rank}. {c.currency_pair}</span>
-                    <span>{c.cluster_name || CLUSTER_NAMES[c.cluster_label] || '-'}</span>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </div>
-        </div>
 
-        <div className="grid grid-cols-12 gap-3.5 mb-3.5">
-          <div className="col-span-12 border border-border-soft rounded-xl bg-surface/80 shadow-lg p-4 glass transition-all duration-200 hover:border-blue-brand/20">
-            <h3 className="text-sm font-semibold m-0 mb-0.5">Dendrogram AHC</h3>
-            <p className="text-xs text-text-soft m-0 mb-3">Hierarki kedekatan antar mata uang berdasarkan corr_dxy & corr_cny.</p>
-            <Dendrogram features={features} cluster={cluster} />
-          </div>
-        </div>
-
-        <div className="grid grid-cols-12 gap-3.5 mb-3.5">
-          <div className="col-span-7 max-lg:col-span-12 border border-border-soft rounded-xl bg-surface/80 shadow-lg p-4 glass transition-all duration-200 hover:border-blue-brand/20">
-            <h3 className="text-sm font-semibold m-0 mb-0.5">Tren corr_dxy & Volatilitas IDR</h3>
-            <p className="text-xs text-text-soft m-0 mb-3">
-              {isInv ? 'Timing hedging saat garis menembus pita ambang.' : 'Early warning saat ketergantungan USD / volatilitas melonjak.'}
-            </p>
-            <TrendChart features={features.IDR} />
-            <div className="flex flex-wrap gap-3 mt-2 text-xs text-text-soft">
-              <span className="inline-flex items-center gap-1.5"><span className="w-2 h-2 rounded-full inline-block flex-none" style={{ background: '#04bd84' }} />corr_dxy IDR</span>
-              <span className="inline-flex items-center gap-1.5"><span className="w-2 h-2 rounded-full inline-block flex-none" style={{ background: '#f2b001' }} />volatility_20d IDR</span>
+            <div className="grid grid-cols-12 gap-3.5 mb-3.5">
+              <div className="col-span-12 border border-border-soft rounded-xl bg-surface/80 shadow-lg p-4 glass transition-all duration-200 hover:border-blue-brand/20">
+                <h3 className="text-sm font-semibold m-0 mb-0.5">Dendrogram AHC</h3>
+                <p className="text-xs text-text-soft m-0 mb-3">Hierarki kedekatan antar mata uang berdasarkan corr_dxy & corr_cny.</p>
+                <Dendrogram features={features} cluster={cluster} />
+              </div>
             </div>
-          </div>
-          <div className="col-span-5 max-lg:col-span-12 border border-border-soft rounded-xl bg-surface/80 shadow-lg p-4 glass transition-all duration-200 hover:border-blue-brand/20">
-            <h3 className="text-sm font-semibold m-0 mb-0.5">🔔 Alert Feed <span className="text-xs font-medium text-text-soft">(WebSocket)</span></h3>
-            <p className="text-xs text-text-soft m-0 mb-3">
-              {isInv ? 'Trigger rebalancing / hedging.' : 'Trigger evaluasi intervensi.'}
-            </p>
-            {(() => {
-              const alerts = notifs.filter(n => n.type === 'alert')
-              return alerts.length > 0 ? (
-              alerts.slice(0, 8).map((n, i) => {
-                const ntype = n.type || 'info'
-                const k = kindMap[ntype] || 'blue'
-                const [bg, fg] = bgMap[k]
-                const icon = iconMap[ntype] || 'ℹ'
-                const title = n.title || n.message || 'Update'
-                const ts = n.ts || ''
-                const d = (() => {
-                  try {
-                    if (!ts) return '-'
-                    const dt = new Date(ts.replace('Z', '+00:00'))
-                    const now = new Date()
-                    const isToday = dt.toDateString() === now.toDateString()
-                    return isToday
-                      ? dt.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })
-                      : dt.toLocaleDateString('id-ID', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })
-                  } catch { return '-' }
-                })()
-                return (
-                  <div className="flex gap-2.5 p-2.5 rounded-lg bg-bg-dark mb-2" key={n.id || `${ntype}-${i}`}>
-                    <div className="w-[26px] h-[26px] rounded-lg grid place-items-center flex-shrink-0 text-sm" style={{ background: bg, color: fg }}>{icon}</div>
-                    <div className="min-w-0 flex-1">
-                      <div className="text-sm font-semibold leading-tight truncate">{title}</div>
-                      <div className="text-[11px] text-text-soft mt-0.5">{d}</div>
-                    </div>
-                  </div>
+
+            <div className="grid grid-cols-12 gap-3.5 mb-3.5">
+              <div className="col-span-7 max-lg:col-span-12 border border-border-soft rounded-xl bg-surface/80 shadow-lg p-4 glass transition-all duration-200 hover:border-blue-brand/20">
+                <h3 className="text-sm font-semibold m-0 mb-0.5">Tren corr_dxy & Volatilitas IDR</h3>
+                <p className="text-xs text-text-soft m-0 mb-3">
+                  Timing hedging saat garis menembus pita ambang.
+                </p>
+                <TrendChart features={features.IDR} />
+                <div className="flex flex-wrap gap-3 mt-2 text-xs text-text-soft">
+                  <span className="inline-flex items-center gap-1.5"><span className="w-2 h-2 rounded-full inline-block flex-none" style={{ background: '#04bd84' }} />corr_dxy IDR</span>
+                  <span className="inline-flex items-center gap-1.5"><span className="w-2 h-2 rounded-full inline-block flex-none" style={{ background: '#f2b001' }} />volatility_20d IDR</span>
+                </div>
+              </div>
+              <div className="col-span-5 max-lg:col-span-12 border border-border-soft rounded-xl bg-surface/80 shadow-lg p-4 glass transition-all duration-200 hover:border-blue-brand/20">
+                <h3 className="text-sm font-semibold m-0 mb-0.5">🔔 Alert Feed <span className="text-xs font-medium text-text-soft">(WebSocket)</span></h3>
+                <p className="text-xs text-text-soft m-0 mb-3">
+                  Trigger rebalancing / hedging.
+                </p>
+                {(() => {
+                  const alerts = notifs.filter(n => n.type === 'alert')
+                  return alerts.length > 0 ? (
+                  alerts.slice(0, 8).map((n, i) => {
+                    const ntype = n.type || 'info'
+                    const k = kindMap[ntype] || 'blue'
+                    const [bg, fg] = bgMap[k]
+                    const icon = iconMap[ntype] || 'ℹ'
+                    const title = n.title || n.message || 'Update'
+                    const ts = n.ts || ''
+                    const d = (() => {
+                      try {
+                        if (!ts) return '-'
+                        const dt = new Date(ts.replace('Z', '+00:00'))
+                        const now = new Date()
+                        const isToday = dt.toDateString() === now.toDateString()
+                        return isToday
+                          ? dt.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })
+                          : dt.toLocaleDateString('id-ID', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })
+                      } catch { return '-' }
+                    })()
+                    return (
+                      <div className="flex gap-2.5 p-2.5 rounded-lg bg-bg-dark mb-2" key={n.id || `${ntype}-${i}`}>
+                        <div className="w-[26px] h-[26px] rounded-lg grid place-items-center flex-shrink-0 text-sm" style={{ background: bg, color: fg }}>{icon}</div>
+                        <div className="min-w-0 flex-1">
+                          <div className="text-sm font-semibold leading-tight truncate">{title}</div>
+                          <div className="text-[11px] text-text-soft mt-0.5">{d}</div>
+                        </div>
+                      </div>
+                    )
+                  })
+                ) : (
+                  <div className="text-sm text-text-soft py-2">Tidak ada alert</div>
                 )
-              })
-            ) : (
-              <div className="text-sm text-text-soft py-2">Tidak ada alert</div>
-            )
-            })()}
-          </div>
-        </div>
+                })()}
+              </div>
+            </div>
+          </>
+        ) : (
+          <>
+            <div className="grid grid-cols-12 gap-3.5 mb-3.5">
+              <div className="col-span-5 max-lg:col-span-12 border border-border-soft rounded-xl bg-surface/80 shadow-lg p-4 glass transition-all duration-200 hover:border-blue-brand/20">
+                <h3 className="text-sm font-semibold m-0 mb-0.5">Indeks Kerentanan IDR (IKR)</h3>
+                <p className="text-xs text-text-soft m-0 mb-3">
+                  Seberapa rentan IDR & apakah mendekati ambang intervensi.
+                </p>
+                <div className="flex items-center gap-3.5 flex-wrap">
+                  <GaugeSVG val={ikrVal} />
+                  <div className="text-center">
+                    <div className="text-4xl font-bold tracking-tight leading-none">{ikrVal}</div>
+                    <Chip text={ikrLabel} kind={ikrChip} />
+                  </div>
+                </div>
+                {ranking.length > 0 && (
+                  <ul className="list-none p-0 mt-2.5">
+                    {ranking.map((c, i) => (
+                      <li key={c.currency_pair} className={`flex justify-between text-sm py-1.5 border-b border-border-soft last:border-b-0 ${c.currency_pair === 'IDR' ? 'font-bold text-blue-brand' : 'text-text-soft'}`}>
+                        <span>{c.rank}. {c.currency_pair}</span>
+                        <span>{c.cluster_name || CLUSTER_NAMES[c.cluster_label] || '-'}</span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+              <div className="col-span-7 max-lg:col-span-12 border border-border-soft rounded-xl bg-surface/80 shadow-lg p-4 glass transition-all duration-200 hover:border-blue-brand/20 flex flex-col">
+                <h3 className="text-sm font-semibold m-0 mb-0.5">Matriks Intervensi Rupiah</h3>
+                <p className="text-xs text-text-soft m-0 mb-3">Petakan posisi IDR berdasarkan tingkat volatilitas dan ketergantungan DXY.</p>
+                <div className="flex-1 flex items-center justify-center">
+                  <InterventionMatrix data={cluster} features={features} />
+                </div>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-12 gap-3.5 mb-3.5">
+              <div className="col-span-5 max-lg:col-span-12 border border-border-soft rounded-xl bg-surface/80 shadow-lg p-4 glass transition-all duration-200 hover:border-blue-brand/20">
+                <h3 className="text-sm font-semibold m-0 mb-0.5">ASEAN Pressure Index (Contagion Alert)</h3>
+                <p className="text-xs text-text-soft m-0 mb-3">Tingkat kerentanan sistemik kawasan ASEAN untuk mengantisipasi efek rambatan.</p>
+                <ASEANPressureIndex data={cluster} features={features} />
+              </div>
+              <div className="col-span-7 max-lg:col-span-12 border border-border-soft rounded-xl bg-surface/80 shadow-lg p-4 glass transition-all duration-200 hover:border-blue-brand/20">
+                <h3 className="text-sm font-semibold m-0 mb-0.5">Peta Cluster Kawasan</h3>
+                <p className="text-xs text-text-soft m-0 mb-3">
+                  Pantau posisi cluster IDR dibandingkan mata uang peer ASEAN.
+                </p>
+                <ScatterPlot data={cluster} features={features} />
+                <div className="flex flex-wrap gap-3 mt-2 text-xs text-text-soft">
+                  <span className="inline-flex items-center gap-1.5"><span className="w-2 h-2 rounded-full inline-block flex-none" style={{ background: '#e3566c' }} />Pro-Dollar</span>
+                  <span className="inline-flex items-center gap-1.5"><span className="w-2 h-2 rounded-full inline-block flex-none" style={{ background: '#f2b001' }} />Transisi</span>
+                  <span className="inline-flex items-center gap-1.5"><span className="w-2 h-2 rounded-full inline-block flex-none" style={{ background: '#04bd84' }} />Mendekati Yuan</span>
+                  <span className="text-text-faint">○ ukuran = volatilitas</span>
+                </div>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-12 gap-3.5 mb-3.5">
+              <div className="col-span-12 border border-border-soft rounded-xl bg-surface/80 shadow-lg p-4 glass transition-all duration-200 hover:border-blue-brand/20">
+                <h3 className="text-sm font-semibold m-0 mb-0.5">Dendrogram AHC (Kedekatan Regional)</h3>
+                <p className="text-xs text-text-soft m-0 mb-3">Struktur hubungan makro regional.</p>
+                <Dendrogram features={features} cluster={cluster} />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-12 gap-3.5 mb-3.5">
+              <div className="col-span-7 max-lg:col-span-12 border border-border-soft rounded-xl bg-surface/80 shadow-lg p-4 glass transition-all duration-200 hover:border-blue-brand/20">
+                <h3 className="text-sm font-semibold m-0 mb-0.5">Tren corr_dxy & Volatilitas IDR</h3>
+                <p className="text-xs text-text-soft m-0 mb-3">Early warning saat ketergantungan USD / volatilitas melonjak.</p>
+                <TrendChart features={features.IDR} />
+                <div className="flex flex-wrap gap-3 mt-2 text-xs text-text-soft">
+                  <span className="inline-flex items-center gap-1.5"><span className="w-2 h-2 rounded-full inline-block flex-none" style={{ background: '#04bd84' }} />corr_dxy IDR</span>
+                  <span className="inline-flex items-center gap-1.5"><span className="w-2 h-2 rounded-full inline-block flex-none" style={{ background: '#f2b001' }} />volatility_20d IDR</span>
+                </div>
+              </div>
+              <div className="col-span-5 max-lg:col-span-12 border border-border-soft rounded-xl bg-surface/80 shadow-lg p-4 glass transition-all duration-200 hover:border-blue-brand/20">
+                <h3 className="text-sm font-semibold m-0 mb-0.5">🔔 Alert Feed (BI Interventions)</h3>
+                <p className="text-xs text-text-soft m-0 mb-3">Evaluasi sinyal intervensi pasar.</p>
+                {(() => {
+                  const alerts = notifs.filter(n => n.type === 'alert')
+                  return alerts.length > 0 ? (
+                  alerts.slice(0, 8).map((n, i) => {
+                    const ntype = n.type || 'info'
+                    const k = kindMap[ntype] || 'blue'
+                    const [bg, fg] = bgMap[k]
+                    const icon = iconMap[ntype] || 'ℹ'
+                    const title = n.title || n.message || 'Update'
+                    const ts = n.ts || ''
+                    const d = (() => {
+                      try {
+                        if (!ts) return '-'
+                        const dt = new Date(ts.replace('Z', '+00:00'))
+                        const now = new Date()
+                        const isToday = dt.toDateString() === now.toDateString()
+                        return isToday
+                          ? dt.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })
+                          : dt.toLocaleDateString('id-ID', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })
+                      } catch { return '-' }
+                    })()
+                    return (
+                      <div className="flex gap-2.5 p-2.5 rounded-lg bg-bg-dark mb-2" key={n.id || `${ntype}-${i}`}>
+                        <div className="w-[26px] h-[26px] rounded-lg grid place-items-center flex-shrink-0 text-sm" style={{ background: bg, color: fg }}>{icon}</div>
+                        <div className="min-w-0 flex-1">
+                          <div className="text-sm font-semibold leading-tight truncate">{title}</div>
+                          <div className="text-[11px] text-text-soft mt-0.5">{d}</div>
+                        </div>
+                      </div>
+                    )
+                  })
+                ) : (
+                  <div className="text-sm text-text-soft py-2">Tidak ada alert</div>
+                )
+                })()}
+              </div>
+            </div>
+          </>
+        )}
 
         <div className="border border-border-soft rounded-xl bg-surface/80 shadow-lg overflow-hidden glass transition-all duration-200 hover:border-blue-brand/20">
           <div className="p-3.5 pb-0">

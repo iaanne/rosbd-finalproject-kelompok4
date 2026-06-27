@@ -42,7 +42,6 @@ from elasticsearch_client import (
     index_log,
 )
 from clustering import _map_cluster_names
-import email_client
 from telegram_client import init as tg_init, send_alert as tg_send
 
 logging.basicConfig(level=logging.INFO)
@@ -291,11 +290,15 @@ async def run_clustering_logic():
         }
         outliers = [r for r in latest_results.values() if r["is_outlier"] and r["currency_pair"] not in ("DXY", "CNY")]
         for o in outliers:
+            advice = (
+                "\n\n💡 *Saran Portofolio (Investor)*: Segera lakukan hedging penuh (100%) terhadap eksposur USD. "
+                "Kurangi aset berbasis Rupiah yang sensitif bunga, alihkan ke obligasi SBN jangka pendek atau pasar uang berdenominasi USD/SGD."
+            )
             alert_msg = {
                 "severity": "high",
                 "category": "outlier",
                 "title": f"Outlier terdeteksi: {o['currency_pair']}",
-                "message": f"{o['currency_pair']} terklasifikasi sebagai outlier — volatility di luar normal.",
+                "message": f"{o['currency_pair']} terklasifikasi sebagai outlier — volatility di luar normal.{advice}",
                 "ts": datetime.now(timezone.utc).isoformat(),
             }
             await emit_alert(alert_msg)
@@ -313,15 +316,6 @@ async def run_clustering_logic():
 
         broadcast_data["outliers"] = [r["currency_pair"] for r in outliers]
         await ws_broadcast({"type": "system", **broadcast_data, "message": notif_data["message"]})
-
-        idr_latest = latest_results.get("IDR") or latest_results.get("IDR/USD")
-        if idr_latest and idr_latest["is_outlier"]:
-            email_client.send_idr_alert(
-                currency_pair=idr_latest["currency_pair"],
-                cluster_label=idr_latest["cluster_label"],
-                is_outlier=idr_latest["is_outlier"],
-                details={"batch_id": batch_id, "algorithm": "K-Means + DBSCAN + AHC"},
-            )
 
         logger.info("Auto-trigger clustering success. Batch ID: %s", batch_id)
         return batch_id
@@ -384,7 +378,6 @@ async def lifespan(app: FastAPI):
     logger.info("Starting up — connecting to Cassandra & Elasticsearch")
     cassandra_init()
     es_init()
-    email_client.init()
     tg_init()
     
     # Start periodic clustering background task
@@ -515,15 +508,12 @@ async def handle_data_update(payload: DataUpdateIn, background_tasks: Background
                 volatility = spread / data.close if data.close else 0
                 threshold = float(os.getenv("IDR_VOLATILITY_THRESHOLD", "0.005"))
                 if volatility >= threshold:
-                    email_client.send_idr_alert(
-                        currency_pair=data.currency_pair,
-                        cluster_label=-1,
-                        is_outlier=True,
-                        volatility=volatility,
-                        details={"open": data.open, "high": data.high,
-                                 "low": data.low, "close": data.close,
-                                 "volume": data.volume},
-                    )
+                    await emit_alert({
+                        "title": "Volatilitas IDR Tinggi Terdeteksi",
+                        "message": f"Volatilitas IDR tercatat sebesar {volatility:.4f} (ambang batas: {threshold:.4f}).\n\n💡 *Saran Portofolio (Investor)*: Pertimbangkan untuk melakukan hedging parsial terhadap eksposur USD.",
+                        "severity": "medium",
+                        "category": "volatility"
+                    })
 
         elif payload.type == "clustering_done":
             data = ClusteringDoneData(**payload.data)
@@ -539,12 +529,16 @@ async def handle_data_update(payload: DataUpdateIn, background_tasks: Background
                     "silhouette_score": data.silhouette_score,
                 })
                 if res.currency_pair.upper() == "IDR" and res.is_outlier:
-                    email_client.send_idr_alert(
-                        currency_pair=res.currency_pair,
-                        cluster_label=res.cluster_label,
-                        is_outlier=res.is_outlier,
-                        details={"batch_id": data.batch_id, "algorithm": data.algorithm},
+                    advice = (
+                        "\n\n💡 *Saran Portofolio (Investor)*: Segera lakukan hedging penuh (100%) terhadap eksposur USD. "
+                        "Kurangi aset berbasis Rupiah yang sensitif bunga, alihkan ke obligasi SBN jangka pendek atau pasar uang berdenominasi USD/SGD."
                     )
+                    await emit_alert({
+                        "title": "Outlier Terdeteksi: IDR",
+                        "message": f"Mata uang IDR terklasifikasi sebagai outlier dalam klasterisasi {data.algorithm}.{advice}",
+                        "severity": "high",
+                        "category": "outlier"
+                    })
             notif_data = {
                 "id": str(uuid.uuid4()),
                 "ts": datetime.now(timezone.utc),
@@ -735,10 +729,40 @@ def health():
 
 @app.get("/api/test-alert")
 async def test_alert(title: str = "Test Alert", message: str = "Ini adalah notifikasi dummy untuk pengujian Telegram.", severity: str = "info"):
+    # Generate the alert action recommendation for Investor based on severity
+    if severity == "high":
+        advice = (
+            "\n\n💡 *Saran Portofolio (Investor)*: Segera lakukan hedging penuh (100%) terhadap eksposur USD. "
+            "Kurangi aset berbasis Rupiah yang sensitif bunga, alihkan ke obligasi SBN jangka pendek atau pasar uang berdenominasi USD/SGD."
+        )
+    elif severity == "medium":
+        advice = (
+            "\n\n💡 *Saran Portofolio (Investor)*: Lakukan hedging parsial (50%) pada transaksi impor mendatang. "
+            "Mulai diversifikasi portofolio valas keluar dari Rupiah ke mata uang safe haven regional seperti SGD atau Yuan (CNY)."
+        )
+    else:
+        advice = "\n\n💡 *Saran Portofolio (Investor)*: Pertahankan alokasi aset normal dan terus pantau perkembangan pasar."
+
+    full_message = f"{message}{advice}"
+
+    # Insert into database (Cassandra)
+    insert_notification({
+        "id": str(uuid.uuid4()),
+        "ts": datetime.now(timezone.utc),
+        "type": "alert",
+        "title": title,
+        "message": full_message,
+        "severity": severity,
+        "category": "test",
+        "batch_id": "test_batch",
+        "algorithm": "manual_test",
+    })
+
+    # Broadcast via websocket & telegram
     await emit_alert({
         "title": title,
-        "message": message,
+        "message": full_message,
         "severity": severity,
         "category": "test"
     })
-    return {"status": "alert_emitted", "title": title, "message": message, "severity": severity}
+    return {"status": "alert_emitted", "title": title, "message": full_message, "severity": severity}
