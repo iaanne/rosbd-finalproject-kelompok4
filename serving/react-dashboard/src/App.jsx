@@ -882,7 +882,11 @@ export default function App() {
                     const d = (() => {
                       try {
                         if (!ts) return '-'
-                        const dt = new Date(ts.replace('Z', '+00:00'))
+                        let dateStr = ts.replace(' ', 'T')
+                        if (!dateStr.endsWith('Z') && !dateStr.includes('+') && !dateStr.includes('GMT')) {
+                          dateStr += 'Z'
+                        }
+                        const dt = new Date(dateStr)
                         const now = new Date()
                         const isToday = dt.toDateString() === now.toDateString()
                         return isToday
@@ -997,7 +1001,11 @@ export default function App() {
                     const d = (() => {
                       try {
                         if (!ts) return '-'
-                        const dt = new Date(ts.replace('Z', '+00:00'))
+                        let dateStr = ts.replace(' ', 'T')
+                        if (!dateStr.endsWith('Z') && !dateStr.includes('+') && !dateStr.includes('GMT')) {
+                          dateStr += 'Z'
+                        }
+                        const dt = new Date(dateStr)
                         const now = new Date()
                         const isToday = dt.toDateString() === now.toDateString()
                         return isToday
